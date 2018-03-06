@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html>
+<head> <meta charset="UTF-8" />
+    <style type="text/css">
+li {list-style-type:none;margin:2px;background-color:purple;color:white;border:1px solid blue; }
+    </style>
+</head>
+<body>
+    <div id="confview" style="float:right;visibility:hidden;">
+        <li id="confTitle"></li>
+        <div id="remoteVideo" style="float:right;"></div>
+        <ul id="actorList" style="float:right;padding:0;border:1px solid red;"></ul>
+    </div>
+
+<table>
+    <tr><td>WS:</td><td><input type="text" id="ws" value="ws://192.168.0.240:7000" /></td>
+        <td rowspan="4" colspan="3" style="padding:0;">
+            <video id="localVideo" autoplay style="padding:0;height:120px;"></video>
+        </td>
+    </tr><tr>
+        <td>Account:</td><td><input type="text" id="uid" value=""/></td>
+    </tr><tr>
+        <td>To Id:</td><td><input type="text" id="toid" value=""/></td>
+    </tr><tr>
+        <td>regionId:</td><td><input type="text" id="regionId" value="0"/></td>
+    </tr><tr>
+        <td>AppKey:</td><td><input type="text" id="appKey" value="6c06d1b0d9015e47ec144097"/><td>
+    </tr><tr>
+        <td>roomId:</td><td><input type="text" id="confid"/></td>
+    </tr><tr>
+        <td>ConfPwd:</td><td><input type="text" id="confpwd" value="123456"/><td>
+    </tr><tr>
+        <td>Stun:</td><td><input type="text" id="stun" value="stun:stun.l.google.com:19302" /></td>
+    </tr><tr>
+        <td>StunId:</td><td><input type="text" id="stunid" value=""/></td>
+    </tr><tr>
+        <td>StunPwd:</td><td><input type="text" id="stunpwd" value=""/></td>
+    </tr><tr>
+        <td>resolution:</td><td><select id="resolution" onchange="setmerge_i();"><option value="1">90P</option><option value="2">180P</option><option value="3" selected="selected">360P</option><option value="4">720P</option><option value="5">1080P</option><option value="6">No Video</option></select></td>
+    </tr><tr>
+        <td>分屏模式:</td><td><select id="iMode" onchange="setmergemode_i();"><option value="1">Free Layout</option><option value="2">Rect Layout</option><option value="3">BigSmallX2</option><option value="4">BigSmallX3</option><option value="12">bigSmallTop</option><option value="13">bigSmallBottom</option></select></td>
+        <td>屏幕共享模式:</td><td><select id="iScsMode" onchange="setmergemode_i();"><option value="1">Screen Share</option><option value="2">Platform</option><option value="3">Platform Cover</option><option value="4">Speaker</option></select></td>
+    </tr><tr>
+        <td>BigSmall actor:</td><td><select id="iBigSmallActor" onchange="setmergemode_i();"></select></td>
+    </tr><tr>
+        <td>Message:</td><td><input type="text" id="message"/></td>
+        <td><button disabled="true" id="sendmsg" onclick="sendmsg();">Send</button></td>
+    </tr>
+</table>
+<i style="visibility:hidden;"><input type="checkbox" id="audio" onclick="update();" checked>audio</input></i>
+<i style="visibility:hidden;"><input type="checkbox" id="video" onclick="update();" checked>video</input></i>
+<i style="visibility:hidden;"><input type="checkbox" id="share" onclick="share();">share</input></i></br>
+<button onclick="document.getElementById('debug').innerHTML='';">Clear log</button>
+<button id="connect" onclick="connect();">Connect</button>
+<button id="call" disabled="true" onclick="call();">Call</button>
+<pre id="debug"></pre>
+</body>
+<script src="webrtc.min.js"></script>
+<script>
+'use strict';
+function $(id){ return document.getElementById(id) }
+function setCookie(c_name,value,expiredays)
+{
+    var exdate=new Date()
+    exdate.setDate(exdate.getDate()+expiredays)
+    document.cookie=c_name+ "=" +escape(value)+
+        ((expiredays==null) ? "" : ";expires="+exdate.toGMTString())
+}
+function getCookie(c_name)
+{
+    if (document.cookie.length>0)
+    {
+        var c_start, c_end;
+        c_start=document.cookie.indexOf(c_name + "=")
+        if (c_start!=-1)
+        { 
+            c_start=c_start + c_name.length+1 
+            c_end=document.cookie.indexOf(";",c_start)
+            if (c_end==-1) c_end=document.cookie.length
+            return unescape(document.cookie.substring(c_start,c_end))
+        } 
+    }
+    return ""
+}
+function checkCookie()
+{
+    trace("Version:" + WebRTC());
+    var ws=getCookie('ws'), uid=getCookie('uid'), room=getCookie('room');
+    if (ws == null || ws == "")
+        ws = window.location.href;
+    if (ws.indexOf("ws") == 0 || ws.indexOf("http") == 0)
+        $("ws").value = ws;
+    if (uid != null && uid != "")
+        $("uid").value = uid;
+    else
+        return;
+    if (room!=null && room!="")
+        $("confid").value = room;
+    else
+        return;
+    var truthBeTold = window.confirm("单击 “确定” 继续会议: " + room +  "\n单击 “取消” 停止。"); 
+    if (truthBeTold) connect();
+}
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+var _jc;
+function trace(txt) { $("debug").innerHTML = txt + "<br>" + $("debug").innerHTML; }
+function onmsg(txt) {
+    if (txt.substring(0,2) == "\r\n") {//large string: help or stats 
+        txt = txt.replace(/\</g,"&lt;");
+        txt = txt.replace(/\>/g,"&gt;");
+        return trace(txt);
+    }
+    var json;
+    try{ json = JSON.parse(txt); } catch(error) { return trace(txt); }
+    var cmd = json.cmd, val = json.val;
+    if (cmd == "onactorstate"){
+        for (var i in val) {
+            var li = $(i);
+            if (!li) {
+                li = document.createElement('li');
+                li.id = i;
+                $("actorList").appendChild(li);
+                var _option = new Option(val[i].nick,i);
+                $("iBigSmallActor").options.add(_option);
+            }
+            var a = val[i];
+            var checkId = "ch_" + i;
+            li.innerHTML = '<input type="checkbox" id = "' + checkId
+                + '" value="1" onclick="subscribe('+"'"+i+"'"+');" />'
+                + a.nick + "[" + a.role.toString(16) + "," + a.state.toString(16)+"]";
+            $(checkId).checked = a.subscribe;
+            $(checkId).disabled = (a.role & 0x02) ? false : true;
+        }
+    }
+    else if (cmd == "onactorleave"){
+        for (var i=0,len=val.length;i<len;++i)
+        {
+            $("actorList").removeChild($(val[i]));
+            for(var k=0; k<iBigSmallActor.options.length;++k)
+                if(iBigSmallActor.options[k].value == val[i])  
+                {  
+                    iBigSmallActor.options.remove(k);
+                    break;
+                }
+        }
+    }
+    else if (cmd == "onconfstate"){
+        var title = val.title;
+        if (val.sharer == $("toid").value)
+            title += " - " + $("uid").value;
+        else if (val.sharer.length > 0)
+            title += " - " + $(val.sharer).textContent;
+        $("confTitle").textContent = title;
+    }
+    else if (cmd == "onselfstate")
+        $("selfstate").textContent = val.nick + "[" + val.role.toString(16) + "," + val.state.toString(16)+"]";
+    else if (cmd == "onconfchat")
+        return trace(val.from + ": " + val.text);
+    else
+        return trace(cmd + (val ? " ok":" failed"));
+}
+
+function subscribe(uri)
+{
+    var checkId = 'ch_' + uri;
+    var state = $(checkId).checked ? 1 : 0;
+    var ret;
+    if ($("toid").value == "") return trace("invalid toid");
+    var txt = "@"+$("toid").value+"vsubscribe"+" "+uri+" "+state;
+
+    ret = _jc.send(txt, $("toid").value);
+    if(ret == 0)
+        return 1;
+
+    return 0;
+}
+var preResolution = 3;
+function setmerge_i()
+{
+    if ($("toid").value == "") return trace("invalid toid");
+    if (!_jc) return;
+    var _width = 640;
+    var _height = 360;
+    var _mode = $("iMode").value;
+    var _scsMode = $("iScsMode").value;
+    var _fps = 24;
+    var _bigSmallActor = "[username:null@sample.cloud.justalk.com]";
+
+    if($("resolution").value == 5)
+    {
+        _width = 1920;
+        _height = 1080;
+    }
+    else if($("resolution").value == 4)
+    {
+        _width = 1280;
+        _height = 720;
+    }
+    else if($("resolution").value == 2)
+    {
+        _width = 320;
+        _height = 180;
+    }
+    else if($("resolution").value == 1)
+    {
+        _width = 160;
+        _height = 90;
+    }
+    else if($("resolution").value == 6) //  no video
+    {
+        if($("call").innerText == "Hangup") // in call
+        {
+            var txt = "@"+$("toid").value+"publish 0";
+            _jc.send(txt, $("toid").value);
+        }
+        preResolution = $("resolution").value;
+        return;
+    }
+    if($("iBigSmallActor").selectedIndex >= 0)
+        _bigSmallActor = $("iBigSmallActor").value;
+
+    var txt = "@"+$("toid").value+"setmerge_i"+" "+_width+" "+_height+" "+_mode+" "+_scsMode+" "+_fps+" "+_bigSmallActor;
+
+    _jc.send(txt, $("toid").value);
+    
+    if(preResolution == 6)
+        _jc.send("@"+$("toid").value+"publish 1", $("toid").value);
+    
+    preResolution = $("resolution").value;
+}
+
+function setmergemode_i()
+{
+    if ($("toid").value == "") return trace("invalid toid");
+    if (!_jc) return;
+    
+    var _mode = $("iMode").value;
+    var _scsMode = $("iScsMode").value;
+    var _bigSmallActor = "[username:null@sample.cloud.justalk.com]";
+    if($("iBigSmallActor").selectedIndex >= 0)
+        _bigSmallActor = $("iBigSmallActor").value;
+    
+    var txt = "@"+$("toid").value+"setmergemode_i"+" "+_mode+" "+_scsMode+" "+_bigSmallActor;
+
+    ret = _jc.send(txt, $("toid").value);
+}
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+function forEachPNodeVisibility(strs, val){
+    for (var i=0,len=strs.length;i<len;++i) $(strs[i]).parentNode.style.visibility = val;
+}
+function forEachDisabled(strs, val) {
+    for (var i=0,len=strs.length;i<len;++i) $(strs[i]).disabled = val;
+}
+function disconnect() {
+    if (!_jc) return;
+    setCookie("room", "", -1);
+    hangup();
+    _jc = _jc.close();
+    forEachDisabled(["call", "sendmsg"], true);
+    forEachDisabled(["ws","uid","connect","appKey","regionId","confid","confpwd","toid"], false);
+    forEachPNodeVisibility(["audio", "video"],'hidden');
+    $("confview").style.visibility = "hidden";
+    $("iBigSmallActor").innerHTML = "";
+    $("connect").innerText = "Connect";
+    $("connect").onclick = connect;
+}
+function connect() {
+    try {
+        _jc = new WebRTC({
+            'id':$("uid").value,
+            'url':$("ws").value,
+            //'__TEST_INSTANCE__':'test1',
+            'confProps': {
+                "roomId":$("confid").value,
+                "regionId":$("regionId").value,
+                "appKey":$("appKey").value,
+                "accountName": $("uid").value,
+                "mediaType":"1",
+                "password": "1",
+                "mtcConfPasswordKey":$("confpwd").value,
+                "mtcConfQualityGradeKey":1,
+                "mtcConfSecurityKey":0,
+                "mtcConfCompositeModeKey":5,
+                "mtcConfStateKey":3,
+                "mtcConfRoleKey":4,
+                "mtcConfCapacityKey":100
+            }
+        }, trace);
+    } catch(error) {
+        trace(error.name + ': ' + error.message + (error.number || ""));
+        return;
+    }
+    _jc.onerror = function(error) {
+        trace(error.name + ': ' + error.message + (error.number || ""));
+        disconnect();
+    };
+    _jc.onopen = function(id, config){
+        setCookie("ws", $("ws").value, 1);
+        setCookie("uid", id);
+        setCookie("room", $("confid").value, 1);
+        $("uid").value = id;
+        if (config) {
+            $("toid").value = config.instanceId;
+            $("toid").disabled = true;
+            $("stun").value = config.iceServers[0].url;
+            $("stunid").value = config.iceServers[0].username;
+            $("stunpwd").value = config.iceServers[0].credential;
+            _jc.send("@"+config.instanceId+"subscribe 0xf");
+        }
+        $("connect").innerText = "Disconnect";
+        $("connect").onclick = disconnect;
+        $("connect").disabled = $("call").disabled = $("sendmsg").disabled = false;
+        forEachPNodeVisibility(["audio", "video"], 'visible');
+        $("actorList").innerHTML = "<li id='selfstate'></li>";
+        $("iBigSmallActor").innerHTML = "";
+        $("confTitle").innerHTML = "";
+        $("confview").style.visibility = "visible";
+    }
+    _jc.onclose = disconnect;
+    _jc.onmessage = onmsg;
+    _jc.oncall = function(peer) {
+        $("toid").value = peer; 
+        call();
+    }
+    _jc.onhangup = hangup;
+    _jc.onremovestream = function(stream, type) {
+        if (type == 'localshare')
+            $("share").checked = false;
+        else if (type == 'localvideo'){
+            $("video").checked = false;
+            $("localVideo").srcObject = null;
+        }
+        else
+            $("remoteVideo").removeChild($(stream.id));
+    }
+    _jc.onaddstream = function(stream, type) {
+        if (type == 'localshare')
+            $("share").checked = true;
+        else if (type == 'localvideo'){
+            $("video").checked = true;
+            $("localVideo").srcObject = stream;
+        }
+        else if (type == 'peervideo' || type == 'peeraudio' || type == 'peershare') {
+            var id = stream.id, view;
+            if (type != 'peeraudio'){
+                view=document.createElement('video');
+                view.addEventListener('loadedmetadata', function() { trace(id + " remote " + this.videoWidth + "x" + this.videoHeight); });
+            }
+            else {
+                view=document.createElement('audio');
+            }
+            view.id = id;
+            view.srcObject = stream;
+            view.autoplay = true;
+            $("remoteVideo").appendChild(view);
+        }
+    }
+    $("ws").disabled = $("uid").disabled = $("connect").disabled = $("appKey").disabled = $("regionId").disabled = $("confid").disabled = $("confpwd").disabled = true;
+}
+function sendmsg() {
+    if ($("toid").value == "") return trace("invalid toid");
+    var txt = $("message").value;
+    if (txt.substring(0,1) == "@") txt = "@"+$("toid").value+txt.substring(1);
+    _jc.send(txt, $("toid").value);
+}
+function hangup() {
+    _jc.hangup();
+    $("localVideo").srcObject = null;
+    $("remoteVideo").innerHTML = "";
+    forEachDisabled(["call","stun","stunid","stunpwd"], false);
+    if ($("ws").value.indexOf("ws")==0) $("toid").disabled = false;
+    $("share").parentNode.style.visibility = 'hidden';
+    $("call").innerText = "Call";
+    $("call").onclick = call;
+}
+function constraints() {
+    var val={ "audio": $("audio").checked };
+    if ($("video").checked) {
+        val.video = {
+            "width": {"max": 640},
+            "height":{"max": 480},
+        }
+    }
+    return val;
+}
+function call() {
+    if ($("toid").value == "" || $("toid").value == $("uid").value) return trace("invalid toid");
+    forEachDisabled(["toid","stun","stunid","stunpwd"], true);
+    $("call").innerText = "Hangup";
+    $("call").onclick = hangup;
+    $("share").checked = false;
+    $("share").parentNode.style.visibility = 'visible';
+
+    _jc.call({'iceServers': [{
+        'urls': [$("stun").value],
+        'username':$("stunid").value,
+        'credential':$("stunpwd").value
+    }]}, constraints(), $("toid").value);
+}
+function share() { if (!_jc || !_jc.share) return;
+    _jc.share($("share").checked);
+}
+function update() { if (!_jc || !_jc.update) return;
+    _jc.update(constraints());
+}
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+$("localVideo").addEventListener('loadedmetadata', function() { trace("local " + this.videoWidth + "x" + this.videoHeight); });
+document.onkeydown = function(e){
+    var ch = String.fromCharCode(e.keyCode||e.which);
+    if (ch >= '0' && ch <= '9' && _jc && _jc.dtmf) _jc.dtmf(ch, 400, 50);
+}
+window.unload = disconnect;
+window.onload = checkCookie();
+</script>
+</html>

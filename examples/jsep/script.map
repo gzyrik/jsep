@@ -1,0 +1,6 @@
+{  
+global:  
+  JsepAPI;  
+  luaopen_jsep;
+local: *;  
+};

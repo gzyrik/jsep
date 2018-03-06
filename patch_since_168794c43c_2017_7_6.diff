@@ -1,0 +1,638 @@
+diff --git a/build/config/linux/gtk/BUILD.gn b/build/config/linux/gtk/BUILD.gn
+index 95345c878a..7d26cf179a 100644
+--- a/build/config/linux/gtk/BUILD.gn
++++ b/build/config/linux/gtk/BUILD.gn
+@@ -25,6 +25,7 @@ group("gtk") {
+     "//remoting/host:remoting_me2me_host_static",
+     "//remoting/test:it2me_standalone_host_main",
+     "//webrtc/examples:peerconnection_client",
++    "//webrtc/examples:jseptester",
+   ]
+ 
+   if (use_gtk3) {
+diff --git a/webrtc/api/peerconnectioninterface.h b/webrtc/api/peerconnectioninterface.h
+index 609fd4aa93..9bf2056d56 100644
+--- a/webrtc/api/peerconnectioninterface.h
++++ b/webrtc/api/peerconnectioninterface.h
+@@ -453,6 +453,8 @@ class PeerConnectionInterface : public rtc::RefCountInterface {
+     // (STUN pings), in milliseconds.
+     rtc::Optional<int> ice_check_min_interval;
+ 
++    int min_port = 0;
++    int max_port = 0;
+     //
+     // Don't forget to update operator== if adding something.
+     //
+diff --git a/webrtc/common_audio/resampler/include/resampler.h b/webrtc/common_audio/resampler/include/resampler.h
+index 259349b670..01368100a2 100644
+--- a/webrtc/common_audio/resampler/include/resampler.h
++++ b/webrtc/common_audio/resampler/include/resampler.h
+@@ -39,7 +39,7 @@ class Resampler {
+   int Push(const int16_t* samplesIn, size_t lengthIn, int16_t* samplesOut,
+            size_t maxLen, size_t& outLen);  // NOLINT: to avoid changing APIs
+ 
+- private:
++ protected:
+   enum ResamplerMode {
+     kResamplerMode1To1,
+     kResamplerMode1To2,
+diff --git a/webrtc/examples/BUILD.gn b/webrtc/examples/BUILD.gn
+index 85813fa222..c361687560 100644
+--- a/webrtc/examples/BUILD.gn
++++ b/webrtc/examples/BUILD.gn
+@@ -446,6 +446,86 @@ if (is_ios || (is_mac && target_cpu != "x86")) {
+   }
+ }
+ 
++config("jsep_warnings_config") {
++  cflags = []
++  if (is_win && is_clang) {
++    cflags += [
++      # Disable warnings failing when compiling with Clang on Windows.
++      # https://bugs.chromium.org/p/webrtc/issues/detail?id=5366
++      "-Wno-format",
++
++      # See https://bugs.chromium.org/p/webrtc/issues/detail?id=6271
++      # for -Wno-reorder and -Wno-sign-compare
++      "-Wno-reorder",
++      "-Wno-sign-compare",
++    ]
++  }
++  if (is_linux && target_cpu == "x86") {
++    cflags += [
++      # Needed to compile on Linux 32-bit.
++      "-Wno-sentinel",
++    ]
++  }
++
++  if (is_clang) {
++    # TODO(ehmaldonado): Make peerconnection_client compile with the standard
++    # set of warnings.
++    # See https://bugs.chromium.org/p/webrtc/issues/detail?id=6306
++    cflags += [ "-Wno-inconsistent-missing-override" ]
++  }
++}
++
++rtc_shared_library("jsep") {
++  testonly = true
++  sources = [
++    "jsep/jsep.cpp",
++    "jsep/audio_device_external.cc",
++    "jsep/audio_device_zmf.cc",
++  ]
++
++  defines = [ "JSEP_EXPORT" ]
++  if (!build_with_chromium && is_clang) {
++    # Suppress warnings from the Chromium Clang plugin (bugs.webrtc.org/163).
++    suppressed_configs += [ "//build/config/clang:find_bad_constructs" ]
++  }
++  deps = []
++  if (is_win) {
++    sources += [
++    ]
++    cflags = [ "/wd4245","/wd4828" ]
++    configs += [ "//build/config/win:windowed" ]
++    deps += [ "//webrtc/media:rtc_media_base" ]
++  }
++  if (is_linux) {
++    sources += [
++    ]
++    cflags = [ "-Wno-deprecated-declarations" ]
++    ldflags = [
++      "-Wl,-Bsymbolic",
++      "-Wl,--retain-symbols-file="+rebase_path("jsep/symbols.map"),
++      "-Wl,--version-script="+rebase_path("jsep/script.map"),
++    ]
++    libs = [
++    ]
++    deps += [ ]
++  }
++  configs += [ ":jsep_warnings_config" ]
++
++  deps += [
++    "//third_party/libyuv",
++    "//webrtc/api:libjingle_peerconnection_test_api",
++    "//webrtc/api:video_frame_api",
++    "//webrtc/base:rtc_base",
++    "//webrtc/base:rtc_base_approved",
++    "//webrtc/base:rtc_json",
++    "//webrtc/media:rtc_media",
++    "//webrtc/modules/video_capture:video_capture_module",
++    "//webrtc/pc:libjingle_peerconnection",
++    "//webrtc/system_wrappers:field_trial_default",
++    "//webrtc/system_wrappers:metrics_default",
++  ]
++}
++
+ if (is_linux || is_win) {
+   config("peerconnection_client_warnings_config") {
+     cflags = []
+@@ -534,7 +614,47 @@ if (is_linux || is_win) {
+       "//webrtc/system_wrappers:metrics_default",
+     ]
+   }
++  rtc_executable("jseptester") {
++    testonly = true
++    sources = [
++      "jseptester/linux_gtk.cpp",
++      "jsep/webrtc.cpp",
++      "jsep/json.cpp",
++    ]
++
++    if (!build_with_chromium && is_clang) {
++      # Suppress warnings from the Chromium Clang plugin (bugs.webrtc.org/163).
++      suppressed_configs += [ "//build/config/clang:find_bad_constructs" ]
++    }
++    deps = []
++    if (is_win) {
++      sources += [
++      ]
++      cflags = [ "/wd4245" ]
++      configs += [ "//build/config/win:windowed" ]
++      deps += [ "//webrtc/media:rtc_media_base" ]
++    }
++    if (is_linux) {
++      sources += [
++      ]
++      cflags = [ "-Wno-deprecated-declarations" ]
++      lib_dirs = [ "zmf" ]
++      ldflags = [ "-g", "-O0"]
++      libs = [
++        "X11",
++        "Xcomposite",
++        "Xext",
++        "Xrender",
++        "zmf",
++      ]
++      deps += [ "//build/config/linux/gtk" ]
++    }
++    configs += [ ":peerconnection_client_warnings_config" ]
+ 
++    deps += [
++      ":jsep"
++    ]
++  }
+   rtc_executable("peerconnection_server") {
+     testonly = true
+     sources = [
+diff --git a/webrtc/modules/audio_coding/acm2/audio_coding_module.cc b/webrtc/modules/audio_coding/acm2/audio_coding_module.cc
+index d231a8447e..3b647f03c5 100644
+--- a/webrtc/modules/audio_coding/acm2/audio_coding_module.cc
++++ b/webrtc/modules/audio_coding/acm2/audio_coding_module.cc
+@@ -966,7 +966,7 @@ int AudioCodingModuleImpl::ReceiveFrequency() const {
+ 
+ // Get current playout frequency.
+ int AudioCodingModuleImpl::PlayoutFrequency() const {
+-  LOG(LS_VERBOSE) << "PlayoutFrequency()";
++  //LOG(LS_VERBOSE) << "PlayoutFrequency()";
+   return receiver_.last_output_sample_rate_hz();
+ }
+ 
+diff --git a/webrtc/modules/audio_device/audio_device_buffer.cc b/webrtc/modules/audio_device/audio_device_buffer.cc
+index b074c67157..5f526b6462 100644
+--- a/webrtc/modules/audio_device/audio_device_buffer.cc
++++ b/webrtc/modules/audio_device/audio_device_buffer.cc
+@@ -182,14 +182,14 @@ void AudioDeviceBuffer::StopRecording() {
+ }
+ 
+ int32_t AudioDeviceBuffer::SetRecordingSampleRate(uint32_t fsHz) {
+-  RTC_DCHECK(main_thread_checker_.CalledOnValidThread());
++  //RTC_DCHECK(main_thread_checker_.CalledOnValidThread());
+   LOG(INFO) << "SetRecordingSampleRate(" << fsHz << ")";
+   rec_sample_rate_ = fsHz;
+   return 0;
+ }
+ 
+ int32_t AudioDeviceBuffer::SetPlayoutSampleRate(uint32_t fsHz) {
+-  RTC_DCHECK(main_thread_checker_.CalledOnValidThread());
++  //RTC_DCHECK(main_thread_checker_.CalledOnValidThread());
+   LOG(INFO) << "SetPlayoutSampleRate(" << fsHz << ")";
+   play_sample_rate_ = fsHz;
+   return 0;
+@@ -206,14 +206,14 @@ int32_t AudioDeviceBuffer::PlayoutSampleRate() const {
+ }
+ 
+ int32_t AudioDeviceBuffer::SetRecordingChannels(size_t channels) {
+-  RTC_DCHECK(main_thread_checker_.CalledOnValidThread());
++  //RTC_DCHECK(main_thread_checker_.CalledOnValidThread());
+   LOG(INFO) << "SetRecordingChannels(" << channels << ")";
+   rec_channels_ = channels;
+   return 0;
+ }
+ 
+ int32_t AudioDeviceBuffer::SetPlayoutChannels(size_t channels) {
+-  RTC_DCHECK(main_thread_checker_.CalledOnValidThread());
++  //RTC_DCHECK(main_thread_checker_.CalledOnValidThread());
+   LOG(INFO) << "SetPlayoutChannels(" << channels << ")";
+   play_channels_ = channels;
+   return 0;
+diff --git a/webrtc/pc/peerconnection.cc b/webrtc/pc/peerconnection.cc
+index 12891df16b..725b6dbe9b 100644
+--- a/webrtc/pc/peerconnection.cc
++++ b/webrtc/pc/peerconnection.cc
+@@ -251,6 +251,8 @@ bool PeerConnectionInterface::RTCConfiguration::operator==(
+     bool enable_ice_renomination;
+     bool redetermine_role_on_ice_restart;
+     rtc::Optional<int> ice_check_min_interval;
++    int min_port = 0;
++    int max_port = 0;
+   };
+   static_assert(sizeof(stuff_being_tested_for_equality) == sizeof(*this),
+                 "Did you add something to RTCConfiguration and forget to "
+@@ -284,7 +286,9 @@ bool PeerConnectionInterface::RTCConfiguration::operator==(
+              o.presume_writable_when_fully_relayed &&
+          enable_ice_renomination == o.enable_ice_renomination &&
+          redetermine_role_on_ice_restart == o.redetermine_role_on_ice_restart &&
+-         ice_check_min_interval == o.ice_check_min_interval;
++         ice_check_min_interval == o.ice_check_min_interval &&
++         min_port == o.min_port &&
++         max_port == o.max_port;
+ }
+ 
+ bool PeerConnectionInterface::RTCConfiguration::operator!=(
+@@ -2338,6 +2342,9 @@ bool PeerConnection::InitializePortAllocator_n(
+   port_allocator_->set_candidate_filter(
+       ConvertIceTransportTypeToCandidateFilter(configuration.type));
+ 
++  //  rik.gong: add port range
++  port_allocator_->SetPortRange(configuration.min_port, configuration.max_port);
++
+   // Call this last since it may create pooled allocator sessions using the
+   // properties set above.
+   port_allocator_->SetConfiguration(stun_servers, turn_servers,
+diff --git a/webrtc/pc/peerconnectionfactory.cc b/webrtc/pc/peerconnectionfactory.cc
+index 4bf118f9af..27584fd6b4 100644
+--- a/webrtc/pc/peerconnectionfactory.cc
++++ b/webrtc/pc/peerconnectionfactory.cc
+@@ -143,7 +143,7 @@ PeerConnectionFactory::~PeerConnectionFactory() {
+ bool PeerConnectionFactory::Initialize() {
+   RTC_DCHECK(signaling_thread_->IsCurrent());
+   rtc::InitRandom(rtc::Time32());
+-
++/* rik.gong: using global webrtc::CreatePortAllocator();
+   default_network_manager_.reset(new rtc::BasicNetworkManager());
+   if (!default_network_manager_) {
+     return false;
+@@ -154,7 +154,7 @@ bool PeerConnectionFactory::Initialize() {
+   if (!default_socket_factory_) {
+     return false;
+   }
+-
++*/
+   channel_manager_.reset(new cricket::ChannelManager(
+       std::move(media_engine_), worker_thread_, network_thread_));
+ 
+@@ -237,7 +237,7 @@ PeerConnectionFactory::CreatePeerConnection(
+   return CreatePeerConnection(configuration, std::move(allocator),
+                               std::move(cert_generator), observer);
+ }
+-
++cricket::PortAllocator* CreatePortAllocator();
+ rtc::scoped_refptr<PeerConnectionInterface>
+ PeerConnectionFactory::CreatePeerConnection(
+     const PeerConnectionInterface::RTCConfiguration& configuration,
+@@ -253,8 +253,11 @@ PeerConnectionFactory::CreatePeerConnection(
+   }
+ 
+   if (!allocator) {
++    /* rik.gong: using global webrtc::CreatePortAllocator();
+     allocator.reset(new cricket::BasicPortAllocator(
+         default_network_manager_.get(), default_socket_factory_.get()));
++    */
++    allocator.reset(CreatePortAllocator());
+   }
+   network_thread_->Invoke<void>(
+       RTC_FROM_HERE, rtc::Bind(&cricket::PortAllocator::SetNetworkIgnoreMask,
+diff --git a/webrtc/rtc_base/openssladapter.cc b/webrtc/rtc_base/openssladapter.cc
+index d0ed07adb0..26ff42e655 100644
+--- a/webrtc/rtc_base/openssladapter.cc
++++ b/webrtc/rtc_base/openssladapter.cc
+@@ -33,7 +33,11 @@
+ #include "webrtc/rtc_base/sslroots.h"
+ #include "webrtc/rtc_base/stringutils.h"
+ #include "webrtc/rtc_base/thread.h"
+-
++#include "webrtc/rtc_base/opensslidentity.h"
++#if defined(WEBRTC_WIN)
++#include <wincrypt.h>
++#undef X509_NAME
++#endif
+ #ifndef OPENSSL_IS_BORINGSSL
+ 
+ // TODO: Use a nicer abstraction for mutex.
+@@ -283,12 +287,34 @@ OpenSSLAdapter::OpenSSLAdapter(AsyncSocket* socket)
+       ssl_(nullptr),
+       ssl_ctx_(nullptr),
+       ssl_mode_(SSL_MODE_TLS),
++      role_(SSL_CLIENT),
++      verify_mode_(SSL_VERIFY_NONE),
++      ssl_max_version_(SSL_PROTOCOL_TLS_12),
+       custom_verification_succeeded_(false) {}
+ 
+ OpenSSLAdapter::~OpenSSLAdapter() {
+   Cleanup();
+ }
+-
++void
++OpenSSLAdapter::LoadVerifyLocation(const char* path) {
++  RTC_DCHECK(state_ == SSL_NONE);
++  verify_location_ = path;
++}
++void
++OpenSSLAdapter::SetVerifyMode(int mode){
++  RTC_DCHECK(state_ == SSL_NONE);
++  verify_mode_ = mode;
++}
++void
++OpenSSLAdapter::SetIdentity(SSLIdentity* identity) {
++  RTC_DCHECK(state_ == SSL_NONE);
++  identity_.reset(static_cast<OpenSSLIdentity*>(identity));
++}
++void
++OpenSSLAdapter::SetRole(SSLRole role) {
++  RTC_DCHECK(state_ == SSL_NONE);
++  role_ = role;
++}
+ void
+ OpenSSLAdapter::SetMode(SSLMode mode) {
+   RTC_DCHECK(state_ == SSL_NONE);
+@@ -390,10 +416,10 @@ OpenSSLAdapter::ContinueSSL() {
+   // Clear the DTLS timer
+   Thread::Current()->Clear(this, MSG_TIMEOUT);
+ 
+-  int code = SSL_connect(ssl_);
++  int code = (role_ == SSL_CLIENT) ? SSL_connect(ssl_) : SSL_accept(ssl_);
+   switch (SSL_get_error(ssl_, code)) {
+   case SSL_ERROR_NONE:
+-    if (!SSLPostConnectionCheck(ssl_, ssl_host_name_.c_str())) {
++    if (!ssl_host_name_.empty() && !SSLPostConnectionCheck(ssl_, ssl_host_name_.c_str())) {
+       LOG(LS_ERROR) << "TLS post connection check failed";
+       // make sure we close the socket
+       Cleanup();
+@@ -842,6 +868,10 @@ bool OpenSSLAdapter::VerifyServerName(SSL* ssl, const char* host,
+       }
+     }
+     GENERAL_NAMES_free(names);
++    if (!ok) {
++      LOG(LS_WARNING) << SN_subject_alt_name 
++        << " not include DNS that match: " << host;
++    }
+   }
+ 
+   char data[256];
+@@ -852,6 +882,10 @@ bool OpenSSLAdapter::VerifyServerName(SSL* ssl, const char* host,
+     data[sizeof(data)-1] = 0;
+     if (_stricmp(data, host) == 0)
+       ok = true;
++    else {
++      LOG(LS_WARNING) << SN_commonName <<": "<< data
++        << " not equal to hostname: " << host;
++    }
+   }
+ 
+   X509_free(certificate);
+@@ -867,7 +901,11 @@ bool OpenSSLAdapter::VerifyServerName(SSL* ssl, const char* host,
+ }
+ 
+ bool OpenSSLAdapter::SSLPostConnectionCheck(SSL* ssl, const char* host) {
+-  bool ok = VerifyServerName(ssl, host, ignore_bad_cert());
++  bool ok;
++  if (role_ == SSL_CLIENT)
++    ok = VerifyServerName(ssl, host, ignore_bad_cert());
++  else
++    ok = true;//TODO
+ 
+   if (ok) {
+     ok = (SSL_get_verify_result(ssl) == X509_V_OK ||
+@@ -915,23 +953,7 @@ OpenSSLAdapter::SSLInfoCallback(const SSL* s, int where, int ret) {
+ 
+ int
+ OpenSSLAdapter::SSLVerifyCallback(int ok, X509_STORE_CTX* store) {
+-#if !defined(NDEBUG)
+-  if (!ok) {
+-    char data[256];
+-    X509* cert = X509_STORE_CTX_get_current_cert(store);
+-    int depth = X509_STORE_CTX_get_error_depth(store);
+-    int err = X509_STORE_CTX_get_error(store);
+-
+-    LOG(LS_INFO) << "Error with certificate at depth: " << depth;
+-    X509_NAME_oneline(X509_get_issuer_name(cert), data, sizeof(data));
+-    LOG(LS_INFO) << "  issuer  = " << data;
+-    X509_NAME_oneline(X509_get_subject_name(cert), data, sizeof(data));
+-    LOG(LS_INFO) << "  subject = " << data;
+-    LOG(LS_INFO) << "  err     = " << err
+-      << ":" << X509_verify_cert_error_string(err);
+-  }
+-#endif
+-
++  if (ok) return 1;
+   // Get our stream pointer from the store
+   SSL* ssl = reinterpret_cast<SSL*>(
+                 X509_STORE_CTX_get_ex_data(store,
+@@ -940,22 +962,66 @@ OpenSSLAdapter::SSLVerifyCallback(int ok, X509_STORE_CTX* store) {
+   OpenSSLAdapter* stream =
+     reinterpret_cast<OpenSSLAdapter*>(SSL_get_app_data(ssl));
+ 
+-  if (!ok && custom_verify_callback_) {
+-    void* cert =
+-        reinterpret_cast<void*>(X509_STORE_CTX_get_current_cert(store));
+-    if (custom_verify_callback_(cert)) {
+-      stream->custom_verification_succeeded_ = true;
+-      LOG(LS_INFO) << "validated certificate using custom callback";
+-      ok = true;
+-    }
+-  }
+-
+   // Should only be used for debugging and development.
+-  if (!ok && stream->ignore_bad_cert()) {
++  if (stream->ignore_bad_cert()) {
+     LOG(LS_WARNING) << "Ignoring cert error while verifying cert chain";
++    return 1;
++  }
++  if (stream->custom_verification_succeeded_)
++    return 1;
++
++  char data[256];
++  X509* cert = X509_STORE_CTX_get_current_cert(store);
++  int depth = X509_STORE_CTX_get_error_depth(store);
++  int err = X509_STORE_CTX_get_error(store);
++
++  LOG(LS_INFO) << "Error with certificate at depth: " << depth;
++  X509_NAME_oneline(X509_get_issuer_name(cert), data, sizeof(data));
++  LOG(LS_INFO) << "  issuer  = " << data;
++  X509_NAME_oneline(X509_get_subject_name(cert), data, sizeof(data));
++  LOG(LS_INFO) << "  subject = " << data;
++  LOG(LS_INFO) << "  err     = " << err
++    << ":" << X509_verify_cert_error_string(err);
++
++  unsigned char *x509_der = NULL;
++  int bytes = i2d_X509(cert, &x509_der);
++  if (!x509_der || bytes <= 0) {
++    LOG(LS_ERROR) << "i2d_X509 failed";
++    return 0;
++  }
++
++#if defined(WEBRTC_WIN)
++  if (!ok && stream->verify_location_ == "*") {
++    HCERTSTORE certStore = CertOpenSystemStore((HCRYPTPROV_LEGACY)0, !depth ? L"ROOT" : L"CA");
++    PCCERT_CONTEXT prevCA=NULL, x509Cert = CertCreateCertificateContext(X509_ASN_ENCODING, x509_der, bytes);
++    do {
++      if (!x509Cert) {
++        LOG(LS_ERROR) << "CertCreateCertificateContext(x509_der) failed";
++        break;
++      }
++      PCCERT_CONTEXT rootCA = CertFindCertificateInStore(certStore, x509Cert->dwCertEncodingType, 0,
++        CERT_FIND_ISSUER_NAME, (const void*)&(x509Cert->pCertInfo->Issuer), prevCA);
++      if (rootCA && CryptVerifyCertificateSignature((HCRYPTPROV_LEGACY)0,
++        rootCA->dwCertEncodingType, x509_der, bytes, &(rootCA->pCertInfo->SubjectPublicKeyInfo))){
++        stream->custom_verification_succeeded_ = true;
++        LOG(LS_INFO) << "validated certificate using `Windows Crypto API'";
++        ok = 1;
++        break;
++      }
++      prevCA = rootCA;
++    } while (prevCA);
++    if (x509Cert) CertFreeCertificateContext(x509Cert);
++    if (prevCA) CertFreeCertificateContext(prevCA);
++    if (certStore) CertCloseStore(certStore, 0);
++  }
++#endif
++  if (!ok && custom_verify_callback_(x509_der, bytes)) {
++    stream->custom_verification_succeeded_ = true;
++    LOG(LS_INFO) << "validated certificate using custom callback";
+     ok = 1;
+   }
+ 
++  OPENSSL_free(x509_der);
+   return ok;
+ }
+ 
+@@ -1000,16 +1066,60 @@ OpenSSLAdapter::SetupSSLContext() {
+                     << "(error=" << error << ')';
+     return nullptr;
+   }
++#ifdef OPENSSL_IS_BORINGSSL
++  SSL_CTX_set_min_proto_version(ctx, ssl_mode_ == SSL_MODE_DTLS ?
++      DTLS1_VERSION : TLS1_VERSION);
++  switch (ssl_max_version_) {
++    case SSL_PROTOCOL_TLS_10:
++      SSL_CTX_set_max_proto_version(ctx, ssl_mode_ == SSL_MODE_DTLS ?
++          DTLS1_VERSION : TLS1_VERSION);
++      break;
++    case SSL_PROTOCOL_TLS_11:
++      SSL_CTX_set_max_proto_version(ctx, ssl_mode_ == SSL_MODE_DTLS ?
++          DTLS1_VERSION : TLS1_1_VERSION);
++      break;
++    case SSL_PROTOCOL_TLS_12:
++    default:
++      SSL_CTX_set_max_proto_version(ctx, ssl_mode_ == SSL_MODE_DTLS ?
++          DTLS1_2_VERSION : TLS1_2_VERSION);
++      break;
++  }
++#endif
+   if (!ConfigureTrustedRootCertificates(ctx)) {
+     SSL_CTX_free(ctx);
+     return nullptr;
+   }
+-
++  if (verify_location_ == "*") {
++    if (1 != SSL_CTX_set_default_verify_paths(ctx)){
++        SSL_CTX_free(ctx);
++        LOG(LS_WARNING) << "SSL_CTX set default_verify_paths failed: " << verify_location_;
++        return nullptr;
++    }
++  }
++  else if (!verify_location_.empty()){
++    auto size = verify_location_.size();
++    const char* ca_file = nullptr, *ca_dir = nullptr;
++    if (size > 4 && verify_location_.rfind(".pem") == verify_location_.size()-4)
++      ca_file = verify_location_.c_str();
++    else if (size > 0)
++      ca_dir = verify_location_.c_str();
++    if (ca_file || ca_dir){
++      if(1 != SSL_CTX_load_verify_locations(ctx, ca_file, ca_dir)){
++        SSL_CTX_free(ctx);
++        LOG(LS_WARNING) << "SSL_CTX verify_location_ failed: " << verify_location_;
++        return nullptr;
++      }
++    }
++  }
++  if (identity_ && !identity_->ConfigureIdentity(ctx)) {
++    SSL_CTX_free(ctx);
++    return nullptr;
++  }
+ #if !defined(NDEBUG)
+   SSL_CTX_set_info_callback(ctx, SSLInfoCallback);
+ #endif
+ 
+-  SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, SSLVerifyCallback);
++  SSL_CTX_set_verify(ctx, verify_mode_, SSLVerifyCallback);
+   SSL_CTX_set_verify_depth(ctx, 4);
+   // Use defaults, but disable HMAC-SHA256 and HMAC-SHA384 ciphers
+   // (note that SHA256 and SHA384 only select legacy CBC ciphers).
+diff --git a/webrtc/rtc_base/openssladapter.h b/webrtc/rtc_base/openssladapter.h
+index 251714545d..dd473ec0da 100644
+--- a/webrtc/rtc_base/openssladapter.h
++++ b/webrtc/rtc_base/openssladapter.h
+@@ -24,7 +24,7 @@ typedef struct x509_store_ctx_st X509_STORE_CTX;
+ namespace rtc {
+ 
+ ///////////////////////////////////////////////////////////////////////////////
+-
++class OpenSSLIdentity;
+ class OpenSSLAdapter : public SSLAdapter, public MessageHandler {
+ public:
+   static bool InitializeSSL(VerificationCallback callback);
+@@ -34,6 +34,10 @@ public:
+   OpenSSLAdapter(AsyncSocket* socket);
+   ~OpenSSLAdapter() override;
+ 
++  void LoadVerifyLocation(const char* path) override;
++  void SetVerifyMode(int mode) override;
++  void SetIdentity(SSLIdentity* identity) override;
++  void SetRole(SSLRole role) override;
+   void SetMode(SSLMode mode) override;
+   int StartSSL(const char* hostname, bool restartable) override;
+   int Send(const void* pv, size_t cb) override;
+@@ -101,7 +105,12 @@ private:
+   std::string ssl_host_name_;
+   // Do DTLS or not
+   SSLMode ssl_mode_;
+-
++  SSLRole role_;
++  std::string verify_location_;
++  int verify_mode_;
++  // Max. allowed protocol version
++  SSLProtocolVersion ssl_max_version_;
++  std::unique_ptr<OpenSSLIdentity> identity_;
+   bool custom_verification_succeeded_;
+ };
+ 
+diff --git a/webrtc/rtc_base/ssladapter.h b/webrtc/rtc_base/ssladapter.h
+index dccb6d186d..be1c425985 100644
+--- a/webrtc/rtc_base/ssladapter.h
++++ b/webrtc/rtc_base/ssladapter.h
+@@ -26,6 +26,14 @@ class SSLAdapter : public AsyncSocketAdapter {
+   bool ignore_bad_cert() const { return ignore_bad_cert_; }
+   void set_ignore_bad_cert(bool ignore) { ignore_bad_cert_ = ignore; }
+ 
++  virtual void LoadVerifyLocation(const char* path){}
++  virtual void SetVerifyMode(int mode){}
++  virtual void SetIdentity(SSLIdentity* identity){}
++
++  // Call this to indicate that we are to play the server role (or client role,
++  // if the default argument is replaced by SSL_CLIENT).
++  virtual void SetRole(SSLRole role){}
++
+   // Do DTLS or TLS (default is TLS, if unspecified)
+   virtual void SetMode(SSLMode mode) = 0;
+ 
+@@ -46,7 +54,7 @@ class SSLAdapter : public AsyncSocketAdapter {
+ 
+ ///////////////////////////////////////////////////////////////////////////////
+ 
+-typedef bool (*VerificationCallback)(void* cert);
++typedef bool (*VerificationCallback)(unsigned char* x509_der, int bytes);
+ 
+ // Call this on the main thread, before using SSL.
+ // Call CleanupSSLThread when finished with SSL.
