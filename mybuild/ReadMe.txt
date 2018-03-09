@@ -4,6 +4,9 @@ BUILD STEP
     - export PATH=$PWD/tools/depot_tools:$PATH
     - gn gen out/linux --args='is_debug=false rtc_use_h264=true'  --filters=//webrtc/examples:jsep 
     - ninja -C out/linux webrtc/examples:jsep
+------------------------------------------------------------------------------------------------------
+Android
+    - gn gen out/android --args='is_debug=false target_os="android" target_cpu="arm"'  --filters=//webrtc/examples:jsep
 ======================================================================================================
 Window
 System requirements
@@ -25,11 +28,25 @@ BUILD STEP
     - ninja -C out/win32 webrtc/examples:jsep
 ======================================================================================================
 MacOS
+EDIT
+    error: unknown warning option '-Wno-unused-lambda-capture'
+    - build/config/compiler/BUILD.gn:
+         # TODO(hans): https://crbug.com/681136
+         #"-Wno-unused-lambda-capture",
+
+BUILD STEP
     - export PATH=$PWD/tools/depot_tools:$PATH
     - gn gen out/mac --args='is_debug=false rtc_use_h264=true clang_base_path="/usr" clang_use_chrome_plugins=false' --filters=//webrtc/examples:jsep
     - ninja -C out/mac webrtc/examples:jsep
-      IF        error: unknown warning option '-Wno-unused-lambda-capture'
-      REMOVE    config/compiler/BUILD.gn: "-Wno-unused-lambda-capture"
-ios
-    - gn gen out/ios --args='is_debug=false rtc_use_h264=true use_xcode_clang=true target_os="ios" target_cpu="arm64"'  --filters=//webrtc/examples:jsep
-    - ninja -C out/ios webrtc/examples:jsep
+------------------------------------------------------------------------------------------------------
+iOS
+EDIT
+    - build/toolchain/mac/BUILD.gn:
+         if (use_xcode_clang) { #(toolchain_args.current_os == "ios" && use_xcode_clang) {
+             prefix = ""
+BUILD STEP
+    - gn gen out/ios --args='is_debug=false clang_base_path="/user" use_xcode_clang=true target_os="ios" target_cpu="arm64"'  --filters=//webrtc/examples:jsep_framework
+    - ninja -C out/ios webrtc/examples:jsep_framework
+
+
+

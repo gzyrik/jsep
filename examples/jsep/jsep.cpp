@@ -35,6 +35,9 @@
 #include <wincrypt.h>
 #pragma warning(disable:4722)
 #endif
+#ifdef WEBRTC_IOS
+#include "webrtc/sdk/objc/Framework/Classes/VideoToolbox/videocodecfactory.h"
+#endif
 
 typedef int(*ZmfAudioOutputCallback)(void* pUser, const char* outputId, int iSampleRateHz, int iChannels,
     unsigned char *buf, int len);
@@ -724,7 +727,13 @@ public:
                 workThread_.Stop();
                 return nullptr;
             }
-            auto factory = webrtc::CreatePeerConnectionFactory(&netThread_, &workThread_, this, adm_, nullptr, nullptr);
+            cricket::WebRtcVideoEncoderFactory* encoder_factory = nullptr;
+            cricket::WebRtcVideoDecoderFactory* decoder_factory = nullptr;
+#ifdef WEBRTC_IOS
+            encoder_factory = new webrtc::VideoToolboxVideoEncoderFactory();
+            decoder_factory = new webrtc::VideoToolboxVideoDecoderFactory();
+#endif
+            auto factory = webrtc::CreatePeerConnectionFactory(&netThread_, &workThread_, this, adm_, encoder_factory, decoder_factory);
             if (!factory){
                 LOG(LS_ERROR) << "PeerConnectionFactory Create failed";
                 ReleaseFactory();

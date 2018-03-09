@@ -1338,7 +1338,10 @@ __declspec(dllexport) const JSEP_API* JSEP_CDECL_CALL JsepAPI(int apiLevel);
 __attribute__ ((visibility ("default"))) const JSEP_API* JSEP_CDECL_CALL JsepAPI(int apiLevel);
 #endif
 #elif defined JSEP_STATIC
-const JSEP_API* JsepAPI(int apiLevel);
+#if __GNUC__ >= 4
+__attribute__ ((visibility ("default")))
+#endif
+const JSEP_API* JSEP_CDECL_CALL JsepAPI(int apiLevel);
 #else
 __inline const JSEP_API* JsepAPI(int apiLevel) {
     typedef const JSEP_API* (JSEP_CDECL_CALL *PFN_JSEPAPI)(int);
