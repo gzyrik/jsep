@@ -826,7 +826,7 @@ public:
         else
             return false;
         const std::string& url = wsURL.substr(ssl ? 6: 5);
-        std::string::size_type n = url.rfind('/');
+        auto n = url.rfind('/');
         if (n != url.npos)
             path = url.substr(n + 1);
         else
@@ -1865,13 +1865,17 @@ int SessionObserverProxy::SetLocalDescription(webrtc::PeerConnectionInterface* i
 struct GetStatsObserver : public webrtc::StatsObserver
 {
     webrtc::PeerConnectionInterface* iface_;
-    const std::string statstype_;
+    std::set<std::string> statstypes_;
     GetStatsObserver(webrtc::PeerConnectionInterface* iface, const std::string& statstype)
-        :iface_(iface), statstype_(statstype){}
+        :iface_(iface)
+    {
+        if (!statstype.empty())
+            SplitString(statstype, statstypes_, ',');
+    }
     virtual void OnComplete(const webrtc::StatsReports& reports) override {
         for (auto stats : reports) {
             if (stats->empty()) continue;
-            if (statstype_.size() > 0 && statstype_ != stats->TypeToString()) continue;
+            if (statstypes_.size() > 0 && statstypes_.find(stats->TypeToString()) == statstypes_.end()) continue;
 
             std::ostringstream oss;
             oss << '{';
@@ -2460,18 +2464,55 @@ static int API_LEVEL_1_SendMessage(RTCPeerConnection* iface,
 }
 
 static int API_LEVEL_1_GetStats(RTCPeerConnection* peer,
-    const char* statsType, int bDebug)
+    const char* statsType, int statsFlags)
 {
     auto iface = (webrtc::PeerConnectionInterface*)peer;
     if (!iface){
         LOG(LS_ERROR) << "JSEP_GetStats invalid param";
         return RTCSessionError_InvalidArgument;
     }
-    if (!statsType) statsType = "";
-    return iface->GetStats(
-        new rtc::RefCountedObject<GetStatsObserver>(iface, statsType),
-        nullptr,
-        bDebug ? iface->kStatsOutputLevelDebug : iface->kStatsOutputLevelStandard) ? 0 : RTCSessionError_InvalidOperation;
+    const auto bDebug = (statsFlags&RTCStatsFlag_Debug) ? iface->kStatsOutputLevelDebug : iface->kStatsOutputLevelStandard;
+    if (statsType && statsType[0] && (statsFlags&(RTCStatsFlag_Audio|RTCStatsFlag_Video)) != 0){
+        webrtc::MediaStreamInterface* target = nullptr;
+        auto streams = iface->remote_streams();
+        size_t n = streams->count();
+        for (size_t i=0; i<n && !target;++i){
+            auto stream = streams->at(i);
+            if (stream->label() == statsType)
+                target = stream;
+        }
+        if (!target) {
+            streams = iface->local_streams();
+            n = streams->count();
+            for (size_t i=0; i<n && !target;++i){
+                auto stream = streams->at(i);
+                if (stream->label() == statsType)
+                    target = stream;
+            }
+        }
+        if (!target) {
+            LOG(LS_ERROR) << "JSEP_GetStats invalid streamId:" << statsType;
+            return RTCSessionError_InvalidArgument;
+        }
+        if (statsFlags&RTCStatsFlag_Audio){
+            for (auto& audio : target->GetAudioTracks()){
+                if (!iface->GetStats(new rtc::RefCountedObject<GetStatsObserver>(iface, "ssrc"), audio, bDebug))
+                    return RTCSessionError_InvalidOperation;
+            }
+        }
+        if (statsFlags&RTCStatsFlag_Video){
+            for (auto& video : target->GetVideoTracks()){
+                if (!iface->GetStats(new rtc::RefCountedObject<GetStatsObserver>(iface, "ssrc"), video, bDebug))
+                    return RTCSessionError_InvalidOperation;
+            }
+        }
+    }
+    else {
+        if (!statsType) statsType = "";
+        if (!iface->GetStats(new rtc::RefCountedObject<GetStatsObserver>(iface, statsType), nullptr, bDebug))
+            return RTCSessionError_InvalidOperation;
+    }
+    return 0;
 }
 struct RTCSocket
 {

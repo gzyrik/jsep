@@ -52,7 +52,9 @@ public:
          *
          * @remarks
          *       type 可选为
-         *       - 'localvideo', 本地视频
+         *       - 'previewaudio', 视频预览
+         *       - 'previewshare', 共享预览
+         *       - 'localmedia', 本地音视频
          *       - 'localshare', 本地共享
          *       - 'peervideo', 对端视频
          *       - 'peeraudio', 对端音频
@@ -184,6 +186,19 @@ public:
     virtual bool InsertDtmf(const std::string& tones, int duration, int inter_tone_gap) = 0;
 
     /**
+     * GetStats接口的参数
+     * 用于细分或过滤统计结果
+     */
+    enum {
+        /** 详细的, 调试级别的统计 */
+        Debug = 1,
+        /** 包含音频相关的统计 */
+        Audio = 2,
+        /** 包含音频相应的统计 */
+        Video = 4,
+    };
+
+    /**
      * 获取统计
      *
      * @param[in] statsType 统计类别,""表示获取所有统计
@@ -191,7 +206,7 @@ public:
      *
      * @return 失败返回false,反之等待OnStatsReport 事件.
      */
-    virtual bool GetStats(const std::string& statsType, bool bDebug) = 0;
+    virtual bool GetStats(const std::string& statsType, int statsFlags) = 0;
 
     /**
      * 由View 在UI线程中回调

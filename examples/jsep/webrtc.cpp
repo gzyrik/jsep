@@ -55,7 +55,7 @@ struct JsepClient : public WebRTC, public RTCSessionObserver, public RTCSocketOb
     virtual bool Share(const std::string& constraints);
     virtual void LogRtcEvent(const std::string& filename);
     virtual void DumpAudioProcessing(const std::string& filename);
-    virtual bool GetStats(const std::string& statsType, bool bDebug);
+    virtual bool GetStats(const std::string& statsType, int statsFlags);
     virtual void _UIThreadCallback(int msg_id, char* data);
 
     void sendSignaling(const std::string& type, const std::string& key, const std::string& json, const std::string* toId = 0);
@@ -156,12 +156,13 @@ bool JsepClient::Update(bool bVideo){
 bool JsepClient::Update(const std::string& constraints){
     if (!m_pc) return false;
     if (m_cameraId.size() > 0){
-        m_view->OnRemoveStream(m_cameraId, "localvideo");
+        m_view->OnRemoveStream(m_cameraId, "previewvideo");
         Zmf_VideoCaptureStop(m_cameraId.c_str());
         m_cameraId.clear();
     }
     if (m_localVideoId.size()){
         JSEP_RemoveLocalStream(m_pc, m_localVideoId.c_str());
+        m_view->OnRemoveStream(m_localVideoId, "localstream");
         m_localVideoId.clear();
     }
     if (!constraints.size()) return true;
@@ -177,6 +178,7 @@ bool JsepClient::Update(const std::string& constraints){
         m_view->Trace("ERROR: add local stream: %s", constraints.c_str());
         return false;
     }
+    m_view->OnAddStream(m_localVideoId, "localstream");
     if (video) {
         JsonValue token[10];
         Json_ParseString(constraints.c_str(), token);
@@ -184,7 +186,7 @@ bool JsepClient::Update(const std::string& constraints){
         const JsonValue* camera = Json_Value(vspec, "zmfCapture");
         if (camera->type == JsonForm_String) {
             m_cameraId = *camera;
-            m_view->OnAddStream(m_cameraId, "localvideo");
+            m_view->OnAddStream(m_cameraId, "previewvideo");
             int width = 640, height = 480;
             if (vspec) {
                 const JsonValue* maxWidth = Json_Value(vspec, "maxWidth");
@@ -551,12 +553,13 @@ bool JsepClient::Share(bool share){
 bool JsepClient::Share(const std::string& constraints){
     if (!m_pc) return false;
     if (m_shareId.size() > 0){
-        m_view->OnRemoveStream(m_shareId, "localshare");
+        m_view->OnRemoveStream(m_shareId, "previewshare");
         Zmf_VideoCaptureStop(m_shareId.c_str());
         m_shareId.clear();
     }
     if (m_localShareId.size()){
         JSEP_RemoveLocalStream(m_pc, m_localShareId.c_str());
+        m_view->OnRemoveStream(m_localShareId, "localshare");
         m_localShareId.clear();
     }
     if (!constraints.size()) return true;
@@ -572,6 +575,7 @@ bool JsepClient::Share(const std::string& constraints){
         m_view->Trace("ERROR: add share stream: %s", constraints.c_str());
         return false;
     }
+    m_view->OnAddStream(m_localShareId, "localshare");
     if (video) {
         JsonValue token[10];
         Json_ParseString(constraints.c_str(), token);
@@ -579,7 +583,7 @@ bool JsepClient::Share(const std::string& constraints){
         const JsonValue* share = Json_Value(vspec, "zmfCapture");
         if (share->type == JsonForm_String) {
             m_shareId = *share;
-            m_view->OnAddStream(m_shareId, "localshare");
+            m_view->OnAddStream(m_shareId, "previewshare");
             int width = 640, height = 480;
             if (vspec) {
                 const JsonValue* maxWidth = Json_Value(vspec, "maxWidth");
@@ -611,9 +615,9 @@ bool JsepClient::InsertDtmf(const std::string& tones, int duration, int inter_to
     if (!m_pc) return false;
     return 0 == JSEP_InsertDtmf(m_pc, tones.c_str(), duration, inter_tone_gap);
 }
-bool JsepClient::GetStats(const std::string& statsType, bool bDebug) {
+bool JsepClient::GetStats(const std::string& statsType, int statsFlags) {
     if (!m_pc) return false;
-    return 0 == JSEP_GetStats(m_pc, statsType.c_str(), bDebug);
+    return 0 == JSEP_GetStats(m_pc, statsType.c_str(), statsFlags);
 }
 void JsepClient::Close(){
     m_view = 0;

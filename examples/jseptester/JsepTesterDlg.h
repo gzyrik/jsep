@@ -67,7 +67,9 @@ private:
 private:
     WebRTC* m_client;
     bool  m_calling;
-    std::string m_peershare, m_peervideo, m_localvideo;
+    std::string m_peershare, m_peervideo, m_previewvideo;
+    std::map<std::string,std::string> m_streams;//streamId->type
+    std::string m_statsType;
     virtual void Trace(const char* format, ...);
     virtual void OnAddStream(const std::string& streamId, const std::string& type);
     virtual void OnRemoveStream(const std::string& streamId, const std::string& type);
@@ -79,7 +81,5 @@ private:
     virtual void OnMessage(const std::string& message, const std::string& fromId){
         Trace("%s>>%s", fromId.c_str(), message.c_str());
     }
-    virtual void OnStatsReport(const std::string &statsTyep, const std::string &statsId, const std::string &stats, const double timestamp){
-        Trace("STATS: %s:%s=%s", statsTyep.c_str(), statsId.c_str(), stats.c_str());
-    }
+    virtual void OnStatsReport(const std::string &statsTyep, const std::string &statsId, const std::string &stats, const double timestamp);
 };

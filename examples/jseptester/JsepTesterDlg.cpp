@@ -161,8 +161,25 @@ void CJsepTesterDlg::OnPaint(){
 void CJsepTesterDlg::OnBnClickedClear(){
     m_lstLog.SetWindowTextW(L"");
 }
+void CJsepTesterDlg::OnStatsReport(const std::string &statsTyep, const std::string &statsId, const std::string &stats, const double timestamp) {
+    Trace("%s: %s:%s=%s", m_statsType.c_str(), statsTyep.c_str(), statsId.c_str(), stats.c_str());
+}
 void CJsepTesterDlg::OnBnClickedGetStats(){
-    if (m_client) m_client->GetStats("", false);
+    if (m_client) {
+        static size_t statsCount = 0;
+        if (statsCount < m_streams.size()) {
+            std::map<std::string, std::string>::iterator iter = m_streams.begin();
+            for (size_t i = 0; i < statsCount; ++i) iter++;
+            m_client->GetStats(iter->first, WebRTC::Audio | WebRTC::Video);
+            m_statsType = iter->second;
+            statsCount++;
+        }
+        else {
+            m_client->GetStats("", WebRTC::Audio | WebRTC::Video);
+            m_statsType = "STATS";
+            statsCount = 0;
+        }  
+    }
 }
 void CJsepTesterDlg::OnBnClickedConnect(){
     if (m_client) return OnClose();
@@ -225,7 +242,7 @@ void CJsepTesterDlg::OnBnClickedVideo() {
 }
 BOOL CJsepTesterDlg::PreTranslateMessage(MSG* pMsg){
     if (pMsg->message == WM_KEYDOWN && m_client && '0' <= pMsg->wParam && pMsg->wParam <= '9'){
-        char ch[2] = { pMsg->wParam, '\0' };
+        char ch[2] = { (char)pMsg->wParam, '\0' };
         m_client->InsertDtmf(ch, 100, 60);
     }
     return CDialog::PreTranslateMessage(pMsg);
@@ -269,8 +286,11 @@ void CJsepTesterDlg::Trace(const char* format, ...){
     m_lstLog.SetWindowText(str);
 }
 void CJsepTesterDlg::OnAddStream(const std::string& streamId, const std::string& type){
-    if (type == "localvideo"){
-        m_localvideo = streamId;
+    if (type != "previewvideo" && type != "previewshare")
+        m_streams[streamId] = type;
+
+    if (type == "previewvideo"){
+        m_previewvideo = streamId;
         Zmf_VideoRenderAdd((void*)m_viewVideo.GetSafeHwnd(), streamId.c_str(), 3, ZmfRenderAuto);
     }
     else if (type == "peervideo"){
@@ -283,13 +303,16 @@ void CJsepTesterDlg::OnAddStream(const std::string& streamId, const std::string&
     }
     if (m_peershare.size() > 0 && m_peervideo.size() > 0)
         Zmf_VideoRenderMove((void*)m_viewVideo.GetSafeHwnd(), m_peervideo.c_str(), 0.75, 0, 1, 0.25);
-    if (m_localvideo.size() > 0 && (m_peershare.size() > 0 || m_peervideo.size() > 0))
-        Zmf_VideoRenderMove((void*)m_viewVideo.GetSafeHwnd(), m_localvideo.c_str(), 0, 0, 0.25, 0.25);
+    if (m_previewvideo.size() > 0 && (m_peershare.size() > 0 || m_peervideo.size() > 0))
+        Zmf_VideoRenderMove((void*)m_viewVideo.GetSafeHwnd(), m_previewvideo.c_str(), 0, 0, 0.25, 0.25);
 }
 void CJsepTesterDlg::OnRemoveStream(const std::string& streamId, const std::string& type){
+    if (type != "previewvideo" && type != "previewshare")
+        m_streams.erase(streamId);
+
     Zmf_VideoRenderRemove((void*)m_viewVideo.GetSafeHwnd(), streamId.c_str());
-    if (type == "localvideo" && m_localvideo == streamId)
-        m_localvideo.clear();
+    if (type == "previewvideo" && m_previewvideo == streamId)
+        m_previewvideo.clear();
     else if (type == "peervideo" && m_peervideo == streamId)
         m_peervideo.clear();
     else if (type == "peershare" && m_peershare == streamId)
@@ -297,8 +320,8 @@ void CJsepTesterDlg::OnRemoveStream(const std::string& streamId, const std::stri
     if (m_peershare.size() == 0){
         if (m_peervideo.size() > 0)
             Zmf_VideoRenderMove((void*)m_viewVideo.GetSafeHwnd(), m_peervideo.c_str(), 0, 0, 1, 1);
-        else if (m_localvideo.size() > 0)
-            Zmf_VideoRenderMove((void*)m_viewVideo.GetSafeHwnd(), m_localvideo.c_str(), 0, 0, 1, 1);
+        else if (m_previewvideo.size() > 0)
+            Zmf_VideoRenderMove((void*)m_viewVideo.GetSafeHwnd(), m_previewvideo.c_str(), 0, 0, 1, 1);
     }
 }
 void CJsepTesterDlg::OnCall(const std::string& fromId, bool p2pOnly){
@@ -306,8 +329,7 @@ void CJsepTesterDlg::OnCall(const std::string& fromId, bool p2pOnly){
     CString url, pwd;
     GetDlgItemText(IDC_STUN, url);
     GetDlgItemText(IDC_STUN_PWD, pwd);
-    m_peershare.clear();
-    m_peervideo.clear();
+    m_peershare = m_peervideo = "";
     if (p2pOnly) {
         if (!m_client->P2P((std::string)CT2A(url, CP_UTF8), (std::string)CT2A(pwd, CP_UTF8), fromId))
             return;
@@ -343,6 +365,8 @@ void CJsepTesterDlg::OnHangup(){
     if (!m_calling) return;
     m_calling = false;
     if (m_client) m_client->Hangup();
+    m_streams.clear();
+    m_peershare = m_peervideo = m_previewvideo = "";
     m_btnShareScreen.SetCheck(0);
     m_btnLogEvent.SetCheck(0);
     m_btnDumpAPM.SetCheck(0);

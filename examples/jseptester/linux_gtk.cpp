@@ -5,6 +5,7 @@
 #include "../zmf/zmf.h"
 #include <string.h>
 #include <memory>
+#include <map>
 enum {
     BUTTON_CONNECT,
     BUTTON_CALL,
@@ -67,6 +68,8 @@ struct GtkMainWnd : public WebRTC::View
     GtkWidget* buttons_[BUTTON_COUNT];
     std::unique_ptr<VideoRenderer> local_renderer_;
     std::unique_ptr<VideoRenderer> remote_video_, remote_share_;
+    std::map<std::string,std::string> m_streams;//streamId->type
+    std::string m_statsType;
 
     WebRTC* m_client;
     bool m_calling;
@@ -93,10 +96,7 @@ public:
     virtual void OnAddStream(const std::string& streamId, const std::string& type);
     virtual void OnRemoveStream(const std::string& streamId, const std::string& type);
     virtual void Trace(const char* format, ...);
-    virtual void OnStatsReport(const std::string& statsTyep, const std::string& statsId,
-        const std::string& stats, const double timestamp) {
-        Trace("STATS: %s:%s=%s", statsTyep.c_str(), statsId.c_str(), stats.c_str());
-    }
+    virtual void OnStatsReport(const std::string& statsTyep, const std::string& statsId, const std::string& stats, const double timestamp);
     virtual void _QueueUIThreadCallback(int msg_id, char* data);
 };
 static GtkMainWnd _wnd;
@@ -145,7 +145,7 @@ void GtkMainWnd::Create() {
         GtkWidget* hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
         gtk_container_add(GTK_CONTAINER(hbox), gtk_label_new("WS:"));
         ws_edit_ = gtk_entry_new();
-        gtk_entry_set_text(GTK_ENTRY(ws_edit_), "wss://192.168.12.66:7000");
+        gtk_entry_set_text(GTK_ENTRY(ws_edit_), "ws://192.168.0.240:7000");
         gtk_box_pack_start(GTK_BOX(hbox), ws_edit_, true, true, 0);
 
         gtk_container_add(GTK_CONTAINER(hbox), gtk_label_new("ID:"));
@@ -164,7 +164,7 @@ void GtkMainWnd::Create() {
         GtkWidget* hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
         gtk_container_add(GTK_CONTAINER(hbox), gtk_label_new("STUN:"));
         stun_edit_ = gtk_entry_new();
-        gtk_entry_set_text(GTK_ENTRY(stun_edit_), "stun:stun.l.google.com:19302");
+        gtk_entry_set_text(GTK_ENTRY(stun_edit_), "stun:test@115.29.4.150:3478");
         gtk_box_pack_start(GTK_BOX(hbox), stun_edit_, true, true, 0);
 
         gtk_container_add(GTK_CONTAINER(hbox), gtk_label_new("TO:"));
@@ -312,8 +312,25 @@ void GtkMainWnd::OnBnClickedClear() {
     GtkListStore* store = GTK_LIST_STORE(gtk_tree_view_get_model(GTK_TREE_VIEW(log_list_)));
     gtk_list_store_clear(store);
 }
+void GtkMainWnd::OnStatsReport(const std::string& statsTyep, const std::string& statsId, const std::string& stats, const double timestamp) {
+    Trace("%s: %s:%s=%s", m_statsType.c_str(), statsTyep.c_str(), statsId.c_str(), stats.c_str());
+}
 void GtkMainWnd::OnBnClickedGetStats() {
-    if (m_client) m_client->GetStats("", false);
+    if (m_client) {
+        static size_t statsCount = 0;
+        if (statsCount < m_streams.size()) {
+            std::map<std::string, std::string>::iterator iter = m_streams.begin();
+            for (size_t i = 0; i < statsCount; ++i) iter++;
+            m_client->GetStats(iter->first, WebRTC::Audio | WebRTC::Video);
+            m_statsType = iter->second;
+            statsCount++;
+        }
+        else {
+            m_client->GetStats("", WebRTC::Audio | WebRTC::Video);
+            m_statsType = "STATS";
+            statsCount = 0;
+        }  
+    }
 }
 void GtkMainWnd::OnBnClickedLogEvent() {
     bool active = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(buttons_[BUTTON_LOG_EVENT]));
@@ -382,6 +399,8 @@ void GtkMainWnd::OnMessage(const std::string& message, const std::string& fromId
     Trace("%s>>%s", fromId.c_str(), message.c_str());
 }
 void GtkMainWnd::OnAddStream(const std::string& streamId, const std::string& type) {
+    if (type != "previewvideo" && type != "previewshare")
+        m_streams[streamId] = type;
     Trace("--- add %s: %s", type.c_str(), streamId.c_str());
     if (type == "peervideo") {
         remote_video_.reset(new VideoRenderer(draw_area_, streamId));
@@ -394,6 +413,8 @@ void GtkMainWnd::OnAddStream(const std::string& streamId, const std::string& typ
     }
 }
 void GtkMainWnd::OnRemoveStream(const std::string& streamId, const std::string& type) {
+    if (type != "previewvideo" && type != "previewshare")
+        m_streams.erase(streamId);
     Trace("--- remove %s: %s", type.c_str(), streamId.c_str());
     if (type == "peervideo")
         remote_video_.reset();

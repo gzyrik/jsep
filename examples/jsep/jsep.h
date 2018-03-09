@@ -116,10 +116,11 @@ typedef const char* RTCIceParameters;
  *      zmfRender:Id0       //ZMF渲染源ID,转接为视频采集源
  *
  *      //内置数值参数
- *      maxWidth,minWidth   //宽度限制
+ *      maxWidth,minWidth,  //宽度限制
  *      maxHeight,minHeight,//高度限制
  *      maxFrameRate,minFrameRate,//帧速率限制
  *      maxAspectRatio,minAspectRatio,//宽度比限制
+ *      googNoiseReduction,//是否降噪
  *    }
  * - 音频
  *    audio: {
@@ -325,8 +326,7 @@ typedef const char* RTCStats;
 /** @} */
 ///////////////////////////////////////////////////////////////////////////////
 /**
- * @defgroup 通信中的错误值
- * @{
+ * 通信中的错误值
  */
 enum RTCSessionError {
     /** 无效操作,未知错误 */
@@ -340,11 +340,10 @@ enum RTCSessionError {
 };
 ///////////////////////////////////////////////////////////////////////////////
 /**
- * @defgroup RTCSocket 事件
- *  不使用RTCSocketObserver, 而是使用统一的回调函数
- *  void (JSEP_CDECL_CALL *observer)(RTCSocketObserver*, RTCSocket*, const char* data, int, enum RTCSocketEvent)
- *  通过不同的事件标识,其中 data 的对应实现含义
- * @{
+ * RTCSocket 事件
+ * 在不使用RTCSocketObserver, 而是使用统一的回调函时,
+ * void (JSEP_CDECL_CALL *observer)(RTCSocketObserver*, RTCSocket*, const char* data, int, enum RTCSocketEvent)
+ * 通过不同的事件标识其中 data 的实际含义
  */
 enum RTCSocketEvent {
     /** 收到消息. 对应 RTCSocketObserver::OnSocketMessage */
@@ -354,7 +353,19 @@ enum RTCSocketEvent {
     /** 获取新的本地候选地址, 其数据为候选地址. 对应 RTCSocketObserver::OnSocketIceCandidate */
     RTCSocketEvent_IceCandidate,
 };
-/** @} */
+///////////////////////////////////////////////////////////////////////////////
+/**
+ * GetStats接口的参数
+ * 用于细分或过滤统计结果
+ */
+enum RTCStatsFlag {
+    /** 详细的, 调试级别的统计 */
+    RTCStatsFlag_Debug = 1,
+    /** 包含音频相关的统计 */
+    RTCStatsFlag_Audio = 2,
+    /** 包含音频相应的统计 */
+    RTCStatsFlag_Video = 4,
+};
 ///////////////////////////////////////////////////////////////////////////////
 /**
  * @defgroup 通信中的会议事件, 携带有JSON格式参数
@@ -947,13 +958,19 @@ extern NSString * const JsepNotification;
  * 获取统计
  *
  * @param[in] iface P2P通信实例
- * @param[in] statsType 统计类别,""或0表示获取所有统计
- * @param[in] bDebug  是否更详细的调试级别
+ * @param[in] statsType 统计类别, @see JsepStatsType
+ * @param[in] statsFlags  统计标识, @see RTCStatsFlag
  *
- * @return 成功返回0,将触发 RTCSessionEvent_StatsReport 事件.
+ * @remarks
+ *  statsType 有如下情况
+ *  - ''或0表示获取所有统计
+ *  - 若含 RTCStatsFlag_Audio 或 RTCStatsFlag_Video 时, statsType 作为streamId
+ *  - 指定类别, 多个由','分开
+ *
+ * @return 成功返回0, 将触发 RTCSessionEvent_StatsReport 事件.
  */
-#define JSEP_GetStats(iface, statsType, bDebug) \
-    JsepAPI(JSEP_API_LEVEL)->GetStats(iface, statsType, bDebug)
+#define JSEP_GetStats(iface, statsType, statsFlags) \
+    JsepAPI(JSEP_API_LEVEL)->GetStats(iface, statsType, statsFlags)
 
 
 /**
@@ -1285,7 +1302,7 @@ typedef struct {
     int (JSEP_CDECL_CALL *SetBitrate)(RTCPeerConnection* iface, int current_bitrate_bps, int max_bitrate_bps, int min_bitrate_bps);
 
     // debug
-    int (JSEP_CDECL_CALL *GetStats) (RTCPeerConnection* iface, const char* statsType, RTCBoolean bDebug);
+    int (JSEP_CDECL_CALL *GetStats) (RTCPeerConnection* iface, const char* statsType, int statsFlags);
     int (JSEP_CDECL_CALL *LogRtcEvent)(RTCPeerConnection* iface, const char* filename, int max_size_mb);
     int (JSEP_CDECL_CALL *DumpAudioProcessing)(const char* filename, int max_size_mb);
 
