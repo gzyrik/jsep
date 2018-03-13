@@ -21,7 +21,7 @@
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
 #if TARGET_IPHONE_SIMULATOR || TARGET_OS_IPHONE
-#define JSEP_STATIC 1
+#define JSEP_IMPORT 1
 #elif TARGET_OS_MAC
 #include <libproc.h>
 #endif
@@ -1337,7 +1337,7 @@ __declspec(dllexport) const JSEP_API* JSEP_CDECL_CALL JsepAPI(int apiLevel);
 #elif __GNUC__ >= 4
 __attribute__ ((visibility ("default"))) const JSEP_API* JSEP_CDECL_CALL JsepAPI(int apiLevel);
 #endif
-#elif defined JSEP_STATIC
+#elif defined JSEP_IMPORT
 #if __GNUC__ >= 4
 __attribute__ ((visibility ("default")))
 #endif

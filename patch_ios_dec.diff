@@ -1,0 +1,13 @@
+diff --git a/webrtc/sdk/objc/Framework/Headers/WebRTC/RTCMacros.h b/webrtc/sdk/objc/Framework/Headers/WebRTC/RTCMacros.h
+index a9890745d8..098448e595 100644
+--- a/webrtc/sdk/objc/Framework/Headers/WebRTC/RTCMacros.h
++++ b/webrtc/sdk/objc/Framework/Headers/WebRTC/RTCMacros.h
+@@ -11,7 +11,7 @@
+ #ifndef WEBRTC_SDK_OBJC_FRAMEWORK_HEADERS_WEBRTC_RTCMACROS_H_
+ #define WEBRTC_SDK_OBJC_FRAMEWORK_HEADERS_WEBRTC_RTCMACROS_H_
+ 
+-#define RTC_EXPORT __attribute__((visibility("default")))
++#define RTC_EXPORT __attribute__((visibility("hidden")))
+ 
+ #if defined(__cplusplus)
+ #define RTC_EXTERN extern "C" RTC_EXPORT

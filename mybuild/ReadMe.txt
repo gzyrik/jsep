@@ -2,7 +2,7 @@ Ubuntu
     sudo ./install-build-deps.sh --no-chromeos-fonts
 BUILD STEP
     - export PATH=$PWD/tools/depot_tools:$PATH
-    - gn gen out/linux --args='is_debug=false rtc_use_h264=true'  --filters=//webrtc/examples:jsep 
+    - gn gen out/linux --args='is_debug=false rtc_use_h264=true ffmpeg_branding="Chrome"'  --filters=//webrtc/examples:jsep 
     - ninja -C out/linux webrtc/examples:jsep
 ------------------------------------------------------------------------------------------------------
 Android
@@ -24,7 +24,7 @@ BUILD STEP
 
     - set PATH=%CD%\tools\depot_tools_win;%PATH%
     - set DEPOT_TOOLS_WIN_TOOLCHAIN=0
-    - gn gen out/win32 --args="is_debug=false rtc_use_h264=true target_cpu=\"x86\"" --ide=vs --filters=//webrtc/examples:jsep
+    - gn gen out/win32 --args="is_debug=false rtc_use_h264=true target_cpu=\"x86\" ffmpeg_branding=\"Chrome\"" --ide=vs --filters=//webrtc/examples:jsep
     - ninja -C out/win32 webrtc/examples:jsep
 ======================================================================================================
 MacOS
@@ -36,7 +36,7 @@ EDIT
 
 BUILD STEP
     - export PATH=$PWD/tools/depot_tools:$PATH
-    - gn gen out/mac --args='is_debug=false rtc_use_h264=true clang_base_path="/usr" clang_use_chrome_plugins=false' --filters=//webrtc/examples:jsep
+    - gn gen out/mac --args='is_debug=false rtc_use_h264=true clang_base_path="/usr" clang_use_chrome_plugins=false ffmpeg_branding="Chrome"' --filters=//webrtc/examples:jsep
     - ninja -C out/mac webrtc/examples:jsep
 ------------------------------------------------------------------------------------------------------
 iOS
@@ -45,7 +45,7 @@ EDIT
          if (use_xcode_clang) { #(toolchain_args.current_os == "ios" && use_xcode_clang) {
              prefix = ""
 BUILD STEP
-    - gn gen out/ios --args='is_debug=false clang_base_path="/user" use_xcode_clang=true target_os="ios" target_cpu="arm64"'  --filters=//webrtc/examples:jsep_framework
+    - gn gen out/ios --args='is_debug=false clang_base_path="/user" use_xcode_clang=true target_os="ios" target_cpu="arm64" ios_enable_code_signing=false'  --filters=//webrtc/examples:jsep_framework
     - ninja -C out/ios webrtc/examples:jsep_framework
 
 

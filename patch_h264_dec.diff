@@ -1,0 +1,13 @@
+diff --git a/webrtc/modules/video_coding/codecs/h264/h264_decoder_impl.cc b/webrtc/modules/video_coding/codecs/h264/h264_decoder_impl.cc
+index be9ae010ec..4a50dde303 100644
+--- a/webrtc/modules/video_coding/codecs/h264/h264_decoder_impl.cc
++++ b/webrtc/modules/video_coding/codecs/h264/h264_decoder_impl.cc
+@@ -94,7 +94,7 @@ int H264DecoderImpl::AVGetBuffer2(
+   H264DecoderImpl* decoder = static_cast<H264DecoderImpl*>(context->opaque);
+   // DCHECK values set in |InitDecode|.
+   RTC_DCHECK(decoder);
+-  RTC_DCHECK_EQ(context->pix_fmt, kPixelFormat);
++  //RTC_DCHECK_EQ(context->pix_fmt, kPixelFormat);
+   // Necessary capability to be allowed to provide our own buffers.
+   RTC_DCHECK(context->codec->capabilities | AV_CODEC_CAP_DR1);
+ 

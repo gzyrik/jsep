@@ -478,11 +478,16 @@ config("jsep_warnings_config") {
 if (is_ios) {
   ios_framework_bundle("jsep_framework") {
     testonly = true
+    sources = [
+      "jsep/jsep.h",
+      "jsep/jsep.cpp",
+      "jsep/audio_device_external.cc",
+      "jsep/audio_device_zmf.cc",
+    ]
+    defines = [ "JSEP_EXPORT" ]
     info_plist = "jsep/Info.plist"
     output_name = "jsep"
-    common_objc_headers = [ "jsep/jsep.h" ]
-    sources = common_objc_headers
-    public_headers = common_objc_headers
+    public_headers = [ "jsep/jsep.h" ]
     ldflags = [
       "-all_load",
       "-install_name",
