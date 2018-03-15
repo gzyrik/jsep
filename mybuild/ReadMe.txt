@@ -6,6 +6,7 @@ BUILD STEP
     - ninja -C out/linux webrtc/examples:jsep
 ------------------------------------------------------------------------------------------------------
 Android
+    - ln -s ~/Works/adt-bundle-mac-x86_64/sdk third_party/android_tools/sdk
     - gn gen out/android --args='is_debug=false target_os="android" target_cpu="arm"'  --filters=//webrtc/examples:jsep
 ======================================================================================================
 Window

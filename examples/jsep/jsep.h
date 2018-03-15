@@ -1,20 +1,16 @@
-/**
- * 模仿 WEBRTC 1.0 标准实现1对1的通信能力,
- *
- * 修订:
- * - 2017.11.17 rik.gong    增加 IceSocket 功能
- * - 2017.09.30 rik.gong    实现 JESP 和 WebSocket 功能 
- */
-
 #ifndef __JSEP_H__
 #define __JSEP_H__
 #pragma once
-#ifdef __cplusplus
-#include <string>
-#include <vector>
-#endif
-#ifdef _WIN32
+
+#if defined(_WIN32) || defined(__CYGWIN__)
 #include <windows.h>
+#define JSEP_THIS_CALL  __thiscall
+#define JSEP_CDECL_CALL __cdecl
+#ifdef _BUILD_JSEP_API_LEVEL__
+#define _JSEP_EXPORT__ __declspec(dllexport)
+#else
+#define _JSEP_EXPORT__ __declspec(dllimport)
+#endif //_BUILD_JSEP_API_LEVEL__
 #else
 #include <unistd.h>
 #include <dlfcn.h>
@@ -25,12 +21,30 @@
 #elif TARGET_OS_MAC
 #include <libproc.h>
 #endif
+#endif //__APPLE__
+#define JSEP_THIS_CALL
+#define JSEP_CDECL_CALL
+#ifdef _BUILD_JSEP_API_LEVEL__
+#define _JSEP_EXPORT__ __attribute__ ((visibility ("default")))
+#else
+#define _JSEP_EXPORT__
+#endif //_BUILD_JSEP_API_LEVEL__
 #endif
-#endif
+
+#ifdef __cplusplus
+#include <string>
+#include <vector>
+#define JSEP_PUBLIC extern "C" _JSEP_EXPORT__
+#define JSEP_INLINE extern inline
+#else
+#define JSEP_PUBLIC extern _JSEP_EXPORT__
+#define JSEP_INLINE extern __inline
+#endif //__cplusplus
+
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-
+////////////////////////////////////////////////////////////////////////////////
 /** 接口函数版本号
  * JSEP_API结构更新,必须更新此版本号
  *
@@ -47,7 +61,7 @@
 typedef int RTCBoolean;
 typedef struct RTCPeerConnection RTCPeerConnection;
 typedef struct RTCSocket RTCSocket;
-///////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 /**
  * @defgroup JSON 格式的配置参数类型
  * @{
@@ -324,7 +338,7 @@ typedef const char* RTCStats;
 #define JsepStats                           "JsepStats"
 
 /** @} */
-///////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 /**
  * 通信中的错误值
  */
@@ -338,11 +352,11 @@ enum RTCSessionError {
     /** 版本不匹配 */
     RTCSessionError_MismatcheaVersion   = -4,
 };
-///////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 /**
  * RTCSocket 事件
  * 在不使用RTCSocketObserver, 而是使用统一的回调函时,
- * void (JSEP_CDECL_CALL *observer)(RTCSocketObserver*, RTCSocket*, const char* data, int, enum RTCSocketEvent)
+ * void (JSEP_CDECL_CALL *observer)(RTCSocketObserver*, RTCSocket*, const char* data, int length, enum RTCSocketEvent)
  * 通过不同的事件标识其中 data 的实际含义
  */
 enum RTCSocketEvent {
@@ -353,7 +367,7 @@ enum RTCSocketEvent {
     /** 获取新的本地候选地址, 其数据为候选地址. 对应 RTCSocketObserver::OnSocketIceCandidate */
     RTCSocketEvent_IceCandidate,
 };
-///////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 /**
  * GetStats接口的参数
  * 用于细分或过滤统计结果
@@ -366,7 +380,7 @@ enum RTCStatsFlag {
     /** 包含音频相应的统计 */
     RTCStatsFlag_Video = 4,
 };
-///////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 /**
  * @defgroup 通信中的会议事件, 携带有JSON格式参数
  *  不使用RTCSessionObserver, 而是使用统一的回调函数
@@ -497,17 +511,11 @@ enum RTCSessionEvent {
 };
 
 #ifdef __cplusplus
-/** C++成员函数调用方式 */
-#if __GNUC__
-#define JSEP_THIS_CALL
-#else
-#define JSEP_THIS_CALL __thiscall
-#endif
 /**
  * 会话过程侦听器, 除Windows平台外都将在独立线程中回调.
  * C++中通过继承该接口,使用回调方式，避免JSON的多余消耗.
  */
-class RTCSessionObserver {
+struct RTCSessionObserver {
 public:
     /**
      * 创建SDP成功
@@ -661,7 +669,7 @@ protected:
 /**
  * RTCSocket事件侦听器
  */
-class RTCSocketObserver {
+struct RTCSocketObserver {
 public:
     /** 状态改变
      * 
@@ -672,8 +680,8 @@ public:
      *  new
      *  checking
      *  completed
-     *  connected[: local=candidate; remote=candidate]
-     *  open[: protocol]
+     *  connected[ local=candidate;remote=candidate]
+     *  open[ protocol]
      *  closed
      *  failed
      */
@@ -702,22 +710,29 @@ protected:
 #else
 typedef struct RTCSessionObserver RTCSessionObserver;
 typedef struct RTCSocketObserver  RTCSocketObserver;
-#endif
+#endif //__cplusplus
 
 #ifdef __OBJC__
 /**
- * 若是iOS系统,且无侦听时,
- * 将以NSNotification的方式广播.
- * 事件名字是 JsmReplyNotification,
- * NSNotification.userInfo 为事件NSDictionary,
- * 其中事件RTCSessionEvent值的字典关键名为 JespEvent
+ * RTCSessionEvent 以 NSNotification 方式的广播.
+ * NSNotification.userInfo 与 JSON 格式 相对应
+ * 例如,事件RTCSessionEvent值的字典关键名为 JespEvent
  */
-@class NSString;
-extern NSString * const JsepNotification;
-#endif
+#define RTCSessionNotification "RTCSessionNotification"
+
+/**
+ * RTCSocketEvent 以 NSNotification 方式的广播.
+ * NSNotification.userInfo 中,
+ * 事件RTCSessionEvent值(NSNumber)的字典关键名为 JespEvent
+ * 数据data,length(NSData) 的字典关键名为 JsepMessage
+ * 对象RTCSocket*(NSValue)的字典关键名为'JsepSocket'
+ */
+#define RTCSocketNotification "RTCSocketNotification"
+
+#endif //__OBJC__
 
 /** @} */
-///////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 /**
  * @defgroup 协商流程
  *
@@ -839,7 +854,7 @@ extern NSString * const JsepNotification;
     JsepAPI(JSEP_API_LEVEL)->CreateAnswer(iface, rtcAnswerOptions)
 
 /** @} */
-///////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 /**
  * @defgroup 通用数据通道
  *
@@ -889,7 +904,7 @@ extern NSString * const JsepNotification;
     JsepAPI(JSEP_API_LEVEL)->SendMessage(iface, channelId, message, length)
 
 /** @} */
-///////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 /**
  * @defgroup 创建实例
  * @{
@@ -930,7 +945,7 @@ extern NSString * const JsepNotification;
     JsepAPI(JSEP_API_LEVEL)->ReleasePeerConnection(iface)
 
 /** @} */
-///////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 /**
  * @defgroup 额外功能
  * @{
@@ -1018,7 +1033,7 @@ extern NSString * const JsepNotification;
     JsepAPI(JSEP_API_LEVEL)->SetBitrate(iface, current_bitrate_bps, max_bitrate_bps, min_bitrate_bps)
 
 /** @} */
-///////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 /**
  * @defgroup RTCSocket 功能
  * @{
@@ -1058,7 +1073,7 @@ extern NSString * const JsepNotification;
  *  callback有效时,将observer作为其参数,被优先使用,否则直接回调observer.
  *  侦听到新连接的改变,都将触发 RTCSocketEvent_StateChange, 其中 rtcsocket 为该连接的服务实例
  *      - 收到新的连接, state 是 'new', 
- *      - 连接建立成功, state 是 'open[: protocol]'
+ *      - 连接建立成功, state 是 'open[ protocol]'
  *      - 连接断开, state 是 'closed', 此时需要调用 RTCSocket_Close(rtcsocket) 关闭该连接
  *  连接中,收到数据, 将触发 RTCSocketEvent_Message, 其中 rtcsocket 为该连接的服务实例
  */
@@ -1133,7 +1148,7 @@ extern NSString * const JsepNotification;
     JsepAPI(JSEP_API_LEVEL)->SetSocketIceParameters(iceSocket, rtcIceParameters)
 
 /** @} */
-///////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 /**
  * @defgroup JSON 功能
  * @{
@@ -1267,13 +1282,7 @@ typedef struct JsonValue  JsonValue;
     JsepAPI(JSEP_API_LEVEL)->ChildJson(jsonValue, 0, key, n_key)
 
 /** @} */
-///////////////////////////////////////////////////////////////////////////////
-/** C函数调用方式 */
-#if __GNUC__
-#define JSEP_CDECL_CALL
-#else
-#define JSEP_CDECL_CALL __cdecl
-#endif
+////////////////////////////////////////////////////////////////////////////////
 typedef struct {
     // media stream
     int (JSEP_CDECL_CALL *AddLocalStream) (RTCPeerConnection* iface, const char* streamId, RTCBoolean* bAudio, RTCBoolean *bVideo, MediaStreamConstraints constraints);
@@ -1328,22 +1337,10 @@ typedef struct {
     int (JSEP_CDECL_CALL *UnescapeJson)(const JsonValue* jsonValue, char* buf);
 } JSEP_API;
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-#ifdef JSEP_EXPORT
-#if defined _WIN32 || defined __CYGWIN__
-__declspec(dllexport) const JSEP_API* JSEP_CDECL_CALL JsepAPI(int apiLevel);
-#elif __GNUC__ >= 4
-__attribute__ ((visibility ("default"))) const JSEP_API* JSEP_CDECL_CALL JsepAPI(int apiLevel);
-#endif
-#elif defined JSEP_IMPORT
-#if __GNUC__ >= 4
-__attribute__ ((visibility ("default")))
-#endif
-const JSEP_API* JSEP_CDECL_CALL JsepAPI(int apiLevel);
+#if defined(JSEP_IMPORT) || defined(_BUILD_JSEP_API_LEVEL__)
+JSEP_PUBLIC const JSEP_API* JSEP_CDECL_CALL JsepAPI(int apiLevel);
 #else
-__inline const JSEP_API* JsepAPI(int apiLevel) {
+JSEP_INLINE const JSEP_API* JsepAPI(int apiLevel) {
     typedef const JSEP_API* (JSEP_CDECL_CALL *PFN_JSEPAPI)(int);
     static PFN_JSEPAPI pfn = (PFN_JSEPAPI) 0;
     if (!pfn) do {
@@ -1363,7 +1360,7 @@ __inline const JSEP_API* JsepAPI(int apiLevel) {
                 strcpy(p, "/libjsep.so");
                 handle = (void*)dlopen(folderpath, RTLD_LOCAL|RTLD_LAZY);
             }
-#elif defined __APPLE__
+#elif defined(TARGET_OS_MAC)
             char *p;
             char pathbuf[PROC_PIDPATHINFO_MAXSIZE];
             char folderpath[PROC_PIDPATHINFO_MAXSIZE];
@@ -1371,10 +1368,10 @@ __inline const JSEP_API* JsepAPI(int apiLevel) {
             proc_pidpath (pid, pathbuf, sizeof(pathbuf));
             realpath(pathbuf, folderpath);
             p = strrchr(folderpath, '/');
-            strcpy(p, "/libjsep.so");
+            strcpy(p, "/libjsep.dylib");
             handle = (void*)dlopen(folderpath, RTLD_LOCAL|RTLD_LAZY);
             if (!handle) {
-                strcpy(p, "/../Frameworks/libjsep.so");
+                strcpy(p, "/../Frameworks/libjsep.dylib");
                 handle = (void*)dlopen(folderpath, RTLD_LOCAL|RTLD_LAZY);
             }
 #endif
@@ -1401,11 +1398,8 @@ __inline const JSEP_API* JsepAPI(int apiLevel) {
     } while(0);
     return pfn(apiLevel);
 }
-#endif //JSEP_EXPORT
-#ifdef __cplusplus
-}
-#endif
-///////////////////////////////////////////////////////////////////////////////
+#endif //JSEP_IMPORT
+////////////////////////////////////////////////////////////////////////////////
 /**
  * JSON对象表述符.
  * @param[in] type 类型, 必须是JSON_OBJECT, JSON_ARRAY, JSON_STRING 之一
@@ -1488,4 +1482,4 @@ struct JsonValue {
     }
 #endif //__cplusplus
 };
-#endif
+#endif //__JSEP_H__

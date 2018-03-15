@@ -446,7 +446,7 @@ var WebRTC = function(config, trace) {
     _rtc.onmessage = trace;
     ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
     var _shareStream;
-    function sharescreen(share) {
+    function sharescreen(share, mediaSource) {
         if (!_pc) return;
         if (!share){
             if (_shareStream && _pc.localShareId == _shareStream.id) {
@@ -461,7 +461,7 @@ var WebRTC = function(config, trace) {
             _rtc.onaddstream(_shareStream, 'localshare');
         }
         else {
-            getScreenId(function (error, sourceId, screen_constraints) {
+            getScreenId(mediaSource, function (error, sourceId, screen_constraints) {
                 if (!_pc) return;
                 if (error) {
                     if (_rtc.onremovestream) _rtc.onremovestream(_shareStream, 'localshare');
@@ -539,12 +539,15 @@ var WebRTC = function(config, trace) {
             captureSourceId: true
         }, '*');
     }
-    var getScreenId = function(callback) {
+    var getScreenId = function(mediaSource, callback) {
         if (!!navigator.mozGetUserMedia) {
+            //<p>In <a href=\"about:config\">about:config</a>,
+            //please enable media.getusermedia.screensharing.enabled<br> and add this" +
+            //" site's domain name to media.getusermedia.screensharing.allowed_domains in about:config
             callback(null, 'firefox', {
                 video: {
-                    mozMediaSource: 'window',
-                    mediaSource: 'window'
+                    mozMediaSource: mediaSource || 'window',
+                    mediaSource: mediaSource || 'window'
                 }
             });
             return;

@@ -481,10 +481,11 @@ if (is_ios) {
     sources = [
       "jsep/jsep.h",
       "jsep/jsep.cpp",
+      "jsep/jsep_objc.m",
       "jsep/audio_device_external.cc",
       "jsep/audio_device_zmf.cc",
     ]
-    defines = [ "JSEP_EXPORT" ]
+    defines = [ "_BUILD_JSEP_API_LEVEL__=1" ]
     info_plist = "jsep/Info.plist"
     output_name = "jsep"
     public_headers = [ "jsep/jsep.h" ]
@@ -524,7 +525,7 @@ rtc_shared_library("jsep") {
     "jsep/audio_device_zmf.cc",
   ]
 
-  defines = [ "JSEP_EXPORT" ]
+  defines = [ "_BUILD_JSEP_API_LEVEL__=1" ]
   if (!build_with_chromium && is_clang) {
     # Suppress warnings from the Chromium Clang plugin (bugs.webrtc.org/163).
     suppressed_configs += [ "//build/config/clang:find_bad_constructs" ]
@@ -550,7 +551,8 @@ rtc_shared_library("jsep") {
     ]
     deps += [ ]
   }
-  if (is_ios) {
+  if (is_ios || is_mac) {
+    sources += [ "jsep/jsep_objc.m" ]
     deps += [ "//webrtc/sdk:objc_videotoolbox" ]
   }
   configs += [ ":jsep_warnings_config" ]

@@ -113,8 +113,9 @@
 ### 通话中动态切换屏幕共享
 切换屏幕共享,将自动进行重新协商
 
-        jc.share(toggle)
+        jc.share(toggle, mediaSource)
         toggle          是否共享窗口或屏幕
+        mediaSource     Firefox 特有的共享类型,可选值: "screen", "window", "application"
 
 ### 发送DTMF
 

@@ -35,7 +35,7 @@
 #include <wincrypt.h>
 #pragma warning(disable:4722)
 #endif
-#ifdef WEBRTC_IOS
+#ifdef __APPLE__
 #include "webrtc/sdk/objc/Framework/Classes/VideoToolbox/videocodecfactory.h"
 #endif
 
@@ -241,27 +241,7 @@ clean:
 #undef FETCH_API2
 #undef FETCH_API
 
-#ifdef __OBJC__
-#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
-#import <UIKit/UIKit.h>
-#else
-#import <AppKit/AppKit.h>
-#endif
-NSString * const JsepNotification = @"JsepNotification";
-static void JSEP_CDECL_CALL objcRTCSessionCallback(RTCSessionObserver*userdata, enum RTCSessionEvent event, const char* json, int len)
-{
-    NSData * data = [[NSData alloc] initWithBytes:json length:len];
-    dispatch_async(dispatch_get_main_queue(), ^{
-        NSError *error = nil;
-        NSDictionary *dictionary= [NSJSONSerialization JSONObjectWithData: data options: 0 error: &error];
-        [data release];
-        if (dictionary)
-            [[NSNotificationCenter defaultCenter] postNotificationName:@JsepNotification object:nil userInfo:dictionary];
-        else
-            LOG(LS_ERROR) << "to NSDictionary failed";
-    });
-}
-#endif
+
 #ifdef __ANDROID__
 #define JSEP_PACKAGE_PATH "com.webrtc.jsep"
 #include <jni.h>
@@ -729,7 +709,7 @@ public:
             }
             cricket::WebRtcVideoEncoderFactory* encoder_factory = nullptr;
             cricket::WebRtcVideoDecoderFactory* decoder_factory = nullptr;
-#ifdef WEBRTC_IOS
+#ifdef __APPLE__
             encoder_factory = new webrtc::VideoToolboxVideoEncoderFactory();
             decoder_factory = new webrtc::VideoToolboxVideoDecoderFactory();
 #endif
@@ -2128,10 +2108,14 @@ static bool ParseRTCIceParameters(const std::string& config, cricket::IceParamet
         return false;
     return true;
 }
+#ifdef __APPLE__
+extern "C" void objcRTCSessionCallback(struct RTCSessionObserver*userdata, enum RTCSessionEvent event, const char* json, int len);
+extern "C" void objcRTCSocketCallback(struct RTCSocketObserver* userdata, RTCSocket* rs, const char* message, int length, enum RTCSocketEvent event);
+#endif
 static RTCPeerConnection* API_LEVEL_1_CreatePeerConnection(const char* config, int zmfAudioPump, int isCaller, RTCSessionObserver* userdata,
     void(JSEP_CDECL_CALL*observer)(RTCSessionObserver*userdata, enum RTCSessionEvent event, const char* json, int len))
 {
-#ifdef __OBJC__
+#ifdef __APPLE__
     if (!observer&&!userdata) observer = objcRTCSessionCallback;
 #endif
     if (!config || (!observer&&!userdata)){
@@ -2819,6 +2803,9 @@ static RTCSocket* API_LEVEL_1_CreateWebSocketServer(const char* wsURL, const cha
         LOG(LS_ERROR) << "CreateWebSocket invalid wsURL";
         return nullptr;
     }
+#ifdef __APPLE__
+    if (!observer&&!userdata) observer = objcRTCSocketCallback;
+#endif
     if (!observer && !userdata) {
         LOG(LS_ERROR) << "CreateWebSocket invalid observer or callback";
         return nullptr;
@@ -2868,7 +2855,8 @@ static RTCSocket* API_LEVEL_1_CreateWebSocketServer(const char* wsURL, const cha
             }
         }
     }
-    auto sock = MainThread::Instance().socketserver()->CreateAsyncSocket(addr.family(), SOCK_STREAM);
+    auto ss = MainThread::Instance().socketserver();
+    auto sock = ss->CreateAsyncSocket(addr.family(), SOCK_STREAM);
     if (!sock) {
         LOG(LS_ERROR) << "CreateWebSocket create SOCK_STREAM failed";
         return nullptr;
@@ -2880,6 +2868,7 @@ static RTCSocket* API_LEVEL_1_CreateWebSocketServer(const char* wsURL, const cha
         delete ws;
         return nullptr;
     }
+    ss->WakeUp();
     return ws;
 }
 static RTCSocket* API_LEVEL_1_CreateWebSocket(const char* wsURL, const char* rtcWebSocketInit, RTCSocketObserver* userdata,
@@ -2889,6 +2878,9 @@ static RTCSocket* API_LEVEL_1_CreateWebSocket(const char* wsURL, const char* rtc
         LOG(LS_ERROR) << "CreateWebSocket invalid wsURL";
         return nullptr;
     }
+#ifdef __APPLE__
+    if (!observer&&!userdata) observer = objcRTCSocketCallback;
+#endif
     if (!observer && !userdata) {
         LOG(LS_ERROR) << "CreateWebSocket invalid observer or callback";
         return nullptr;
@@ -2912,7 +2904,8 @@ static RTCSocket* API_LEVEL_1_CreateWebSocket(const char* wsURL, const char* rtc
         LOG(LS_ERROR) << "invalid ip address: " << host;
         return nullptr;
     }
-    auto sock = MainThread::Instance().socketserver()->CreateAsyncSocket(ip.family(), SOCK_STREAM);
+    auto ss = MainThread::Instance().socketserver();
+    auto sock = ss->CreateAsyncSocket(ip.family(), SOCK_STREAM);
     if (!sock) {
         LOG(LS_ERROR) << "CreateWebSocket create SOCK_STREAM failed";
         return nullptr;
@@ -2966,6 +2959,7 @@ static RTCSocket* API_LEVEL_1_CreateWebSocket(const char* wsURL, const char* rtc
         LOG(LS_ERROR) << "CreateWebSocket Connect failed";
         return nullptr;
     }
+    ss->WakeUp();
     return ws;
 }
 static uint32_t ConvertIceTransportTypeToCandidateFilter(webrtc::PeerConnectionInterface::IceTransportsType type)
@@ -3597,7 +3591,7 @@ const JSEP_API* JsepAPI(int apiLevel)
         if (lua_pushcclosure)
             LOG(LS_INFO) << "LUA_REGISTRYINDEX = " << LUA_REGISTRYINDEX;
     }
-    if (apiLevel  < 1|| apiLevel > JSEP_API_LEVEL) {
+    if (apiLevel  < 1|| apiLevel > _BUILD_JSEP_API_LEVEL__) {
         LOG(LS_ERROR) <<"Invalid JSEP_API_LEVEL: " << apiLevel;
         return nullptr;
     }
@@ -3739,13 +3733,7 @@ template<typename T> struct luaL_Var {
     const char* name;
     T           value;
 };
-extern "C" {
-#if defined _WIN32 || defined __CYGWIN__
-__declspec(dllexport)
-#elif __GNUC__ >= 4
-__attribute__ ((visibility ("default")))
-#endif
-int luaopen_jsep (lua_State *L)
+JSEP_PUBLIC int luaopen_jsep (lua_State *L)
 {
     if (!LocateLua(L))
         return 0;
@@ -3770,7 +3758,7 @@ int luaopen_jsep (lua_State *L)
         {nullptr, 0}
     };
     const struct luaL_Var<int> int_vars[] =  {
-        {"JSEP_API_LEVEL", JSEP_API_LEVEL},
+        {"JSEP_API_LEVEL", _BUILD_JSEP_API_LEVEL__},
         {"RTCSocketEvent_Message", RTCSocketEvent_Message},
         {"RTCSocketEvent_StateChange", RTCSocketEvent_StateChange},
         {"RTCSocketEvent_IceCandidate", RTCSocketEvent_IceCandidate},
@@ -3805,5 +3793,4 @@ int luaopen_jsep (lua_State *L)
     if (_keyAPI)
         LOG(LS_INFO) << "LUA_REGISTRYINDEX = " << LUA_REGISTRYINDEX;
     return 1;
-}
 }
