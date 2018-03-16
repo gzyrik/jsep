@@ -97,6 +97,8 @@ static int (*luaL_ref) (lua_State *L, int t);
 static void (*luaL_unref) (lua_State *L, int t, int ref);
 static void*(*lua_touserdata) (lua_State *L, int idx);
 static const char* (*lua_tolstring) (lua_State *L, int idx, size_t *len);
+static int (*lua_toboolean) (lua_State *L, int idx);
+static lua_Integer (*lua_tointegerx) (lua_State *L, int idx, int *isnum);
 static void (*lua_pushlstring) (lua_State *L, const char *s, size_t l);
 static void (*lua_pushlightuserdata) (lua_State *L, void *p);
 static void (*lua_pushinteger) (lua_State *L, lua_Integer n);
@@ -117,6 +119,21 @@ static void (*lua_pushcclosure) (lua_State *L, lua_CFunction fn, int n);
 #ifdef _WIN32
 #include <windows.h>
 #include <tlhelp32.h>
+static BOOL IsIdleMessage(MSG* pMsg) {
+    static UINT nMsgLast;
+    static POINT ptCursorLast;
+    if (pMsg->message == WM_MOUSEMOVE || pMsg->message == WM_NCMOUSEMOVE) {
+        if (ptCursorLast.x == pMsg->pt.x && ptCursorLast.y == pMsg->pt.y && pMsg->message == nMsgLast)
+            return FALSE;
+
+        ptCursorLast = pMsg->pt;  // remember for next time
+        nMsgLast = pMsg->message;
+		return TRUE;
+    }
+
+    // WM_PAINT and WM_SYSTIMER (caret blink)
+    return pMsg->message != WM_PAINT && pMsg->message != 0x0118;
+}
 #define TRY_API(func, name) *(void**)&func = (void*)GetProcAddress(me32.hModule, name)
 #else
 #include <dlfcn.h>
@@ -216,12 +233,15 @@ static bool LocateLua(lua_State *L)
             FETCH_API(luaL_unref);
             FETCH_API(lua_touserdata);
             FETCH_API(lua_tolstring);
+            FETCH_API(lua_toboolean);
             FETCH_API(lua_pushlstring);
             FETCH_API(lua_pushlightuserdata);
             FETCH_API(lua_pushinteger);
             FETCH_API(lua_createtable);
             FETCH_API(lua_setfield);
             FETCH_API(lua_rawgeti);
+            if (0 == (TRY_API(lua_tointegerx, "lua_tointegerx")))
+                FETCH_API2(lua_tointegerx, "lua_tointeger");
             if (0 == (TRY_API(lua_pcallk, "lua_pcallk")))
                 FETCH_API2(lua_pcallk, "lua_pcall");
             else
@@ -656,17 +676,50 @@ public:
 #endif
         rtc::Thread::Quit();
     }
-    void MainLoop() {
-#ifdef _WIN32
-        MSG msg;
-        while(GetMessage(&msg, nullptr,0,0)) {
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
-        }
-#else
+    void MainLoop(const std::function<bool(int)>& onidle) {
+        bool bIdle = true;
+        int lIdleCount = 0;
         rtc::ThreadManager::Instance()->SetCurrentThread(this);
-        rtc::Thread::Run();
+        if (!onidle) {
+#ifdef _WIN32
+            MSG msg;
+            while(::GetMessage(&msg, nullptr,0,0)) {
+                ::TranslateMessage(&msg);
+                ::DispatchMessage(&msg);
+            }
+#else
+            rtc::Thread::Run();
 #endif
+        }
+        for (;!IsQuitting();) {
+#ifdef _WIN32
+            MSG msg;
+            while (bIdle && !::PeekMessage(&msg, nullptr, 0, 0, PM_NOREMOVE)) {
+                if (!onidle(lIdleCount++)) bIdle = false;
+            }
+            do {
+                if (!::GetMessage(&msg, nullptr, 0, 0)) break;
+                ::TranslateMessage(&msg);
+                ::DispatchMessage(&msg);
+                if (IsIdleMessage(&msg)) {
+                    bIdle = true;
+                    lIdleCount = 0;
+                }
+            } while (::PeekMessage(&msg, nullptr, 0, 0, PM_NOREMOVE));
+#else
+            rtc::Message msg;
+            while (bIdle && !rtc::Thread::Peek(&msg)) {
+                if (!onidle(lIdleCount++)) bIdle = false;
+            }
+            do {
+                if (!rtc::Thread::ProcessMessages(1)) break;
+            } while (rtc::Thread::Peek(&msg));
+            bIdle = true;
+            lIdleCount = 0;
+#endif
+        }
+        Stop();
+        Restart();//reset IsQuitting() if the thread is being restarted
     }
     void Terminate() {
         rtc::CritScope _(&lock_);
@@ -3663,6 +3716,174 @@ static void l_ws_observer(RTCSocketObserver* userdata, RTCSocket* rtcsocket, con
         lua_pop(_L, 1);
     }
 }
+static void l_pc_observer(RTCSessionObserver*userdata, enum RTCSessionEvent event, const char* json, int length)
+{
+    lua_rawgeti(_L, LUA_REGISTRYINDEX, (size_t)userdata);
+    lua_pushinteger(_L, event);
+    lua_pushlstring(_L, json, length);
+    if (lua_pcall(_L, 2, 0, 0) != 0){
+        const char* err = lua_tolstring(_L, -1, nullptr);
+        fprintf(stderr, "Lua:%s\n", err);
+        LOG(LS_ERROR) << err;
+        lua_pop(_L, 1);
+    }
+}
+static int l_pc(lua_State *L)
+{
+    const char* rtcConfiguration = lua_tolstring(L, 1, nullptr);
+    bool zmfAudioPump = lua_toboolean(L, 2) != 0;
+    bool isCaller = lua_toboolean(L, 3) != 0;
+    if (!rtcConfiguration || !lua_isfunction(L, -1)) return 0;
+
+    int funref = luaL_ref(L, LUA_REGISTRYINDEX);
+    if (funref == LUA_REFNIL){
+        LOG(LS_ERROR) <<"luaL_ref failed";
+        return 0;
+    }
+
+    auto pc = JSEP_RTCPeerConnection(rtcConfiguration, zmfAudioPump, isCaller,  (RTCSessionObserver*)(size_t)funref, l_pc_observer);
+    if (!pc) {
+        luaL_unref(L, LUA_REGISTRYINDEX, funref);
+        return 0;
+    }
+    lua_pushlightuserdata(L, pc);
+    return 1;
+}
+static int l_addlocalstream(lua_State *L)
+{
+    RTCPeerConnection* pc = (RTCPeerConnection*)lua_touserdata(L, 1);
+    const char* streamId = lua_tolstring(L, 2, nullptr);
+    RTCBoolean bAudio = lua_toboolean(L, 3) != 0;
+    RTCBoolean bVideo = lua_toboolean(L, 4) != 0;
+    const char* constraints = lua_tolstring(L, 5, nullptr);
+    lua_pushinteger(L, JSEP_AddLocalStream(pc, streamId, &bAudio, &bVideo, constraints));
+    lua_pushinteger(L, bAudio);
+    lua_pushinteger(L, bVideo);
+    return 3;
+}
+static int l_removelocalstream(lua_State *L)
+{
+    RTCPeerConnection* pc = (RTCPeerConnection*)lua_touserdata(L, 1);
+    const char* streamId = lua_tolstring(L, 2, nullptr);
+    JSEP_RemoveLocalStream(pc, streamId);
+    return 0;
+}
+static int l_publishremotestream(lua_State *L)
+{
+    RTCPeerConnection* pc = (RTCPeerConnection*)lua_touserdata(L, 1);
+    const char* streamId = lua_tolstring(L, 2, nullptr);
+    int renderOrCapturerBits = lua_tointegerx(L, 3, nullptr);
+    int videoTrackMask = lua_tointegerx(L, 4, nullptr);
+    lua_pushinteger(L, JSEP_PublishRemoteStream(pc, streamId, renderOrCapturerBits, videoTrackMask));
+    return 1;
+}
+static int l_addicecandidate(lua_State *L)
+{
+    RTCPeerConnection* pc = (RTCPeerConnection*)lua_touserdata(L, 1);
+    const char* rtcIceCandidate = lua_tolstring(L, 2, nullptr);
+    lua_pushinteger(L, JSEP_AddIceCandidate(pc, rtcIceCandidate));
+    return 1;
+}
+static int l_createoffer(lua_State *L)
+{
+    RTCPeerConnection* pc = (RTCPeerConnection*)lua_touserdata(L, 1);
+    const char* rtcOfferOptions = lua_tolstring(L, 2, nullptr);
+    lua_pushinteger(L,JSEP_CreateOffer(pc, rtcOfferOptions));
+    return 1;
+}
+static int l_setlocaldescription(lua_State *L)
+{
+    RTCPeerConnection* pc = (RTCPeerConnection*)lua_touserdata(L, 1);
+    const char* rtcSessionDescription = lua_tolstring(L, 2, nullptr);
+    lua_pushinteger(L,JSEP_SetLocalDescription(pc, rtcSessionDescription));
+    return 1;
+}
+static int l_setremotedescription(lua_State *L)
+{
+    RTCPeerConnection* pc = (RTCPeerConnection*)lua_touserdata(L, 1);
+    const char* rtcSessionDescription = lua_tolstring(L, 2, nullptr);
+    lua_pushinteger(L,JSEP_SetRemoteDescription(pc, rtcSessionDescription));
+    return 1;
+}
+static int l_createanswer(lua_State *L)
+{
+    RTCPeerConnection* pc = (RTCPeerConnection*)lua_touserdata(L, 1);
+    const char* rtcAnswerOptions = lua_tolstring(L, 2, nullptr);
+    lua_pushinteger(L,JSEP_CreateAnswer(pc, rtcAnswerOptions));
+    return 1;
+}
+static int l_createdatachannel(lua_State *L)
+{
+    RTCPeerConnection* pc = (RTCPeerConnection*)lua_touserdata(L, 1);
+    const char* channelId = lua_tolstring(L, 2, nullptr);
+    const char* rtcDataChannelInit = lua_tolstring(L, 3, nullptr);
+    lua_pushinteger(L,JSEP_CreateDataChannel(pc, channelId, rtcDataChannelInit));
+    return 1;
+}
+static int l_closedatachannel(lua_State *L)
+{
+    RTCPeerConnection* pc = (RTCPeerConnection*)lua_touserdata(L, 1);
+    const char* channelId = lua_tolstring(L, 2, nullptr);
+    JSEP_CloseDataChannel(pc, channelId);
+    return 0;
+}
+static int l_sendmessage(lua_State *L)
+{
+    RTCPeerConnection* pc = (RTCPeerConnection*)lua_touserdata(L, 1);
+    const char* channelId = lua_tolstring(L, 2, nullptr);
+    size_t len;
+    const char* str = lua_tolstring(L, 3, &len);
+    lua_pushinteger(L,JSEP_SendMessage(pc, channelId, str, len));
+    return 1;
+}
+static int l_insertdtmf(lua_State *L)
+{
+    RTCPeerConnection* pc = (RTCPeerConnection*)lua_touserdata(L, 1);
+    const char* tones = lua_tolstring(L, 2, nullptr);
+    int duration_ms = lua_tointegerx(L, 3, nullptr);
+    int inter_tone_gap = lua_tointegerx(L, 4, nullptr);
+    lua_pushinteger(L,JSEP_InsertDtmf(pc, tones, duration_ms, inter_tone_gap));
+    return 1;
+}
+static int l_setbitrate(lua_State *L)
+{
+    RTCPeerConnection* pc = (RTCPeerConnection*)lua_touserdata(L, 1);
+    int current_bitrate_bps = lua_tointegerx(L, 2, nullptr);
+    int max_bitrate_bps = lua_tointegerx(L, 3, nullptr);
+    int min_bitrate_bps = lua_tointegerx(L, 4, nullptr);
+    lua_pushinteger(L,JSEP_SetBitrate(pc,current_bitrate_bps,max_bitrate_bps,min_bitrate_bps));
+    return 1;
+}
+static int l_getstats(lua_State *L)
+{
+    RTCPeerConnection* pc = (RTCPeerConnection*)lua_touserdata(L, 1);
+    const char* statsType = lua_tolstring(L, 2, nullptr);
+    int statsFlags = lua_tointegerx(L, 3, nullptr);
+    lua_pushinteger(L,JSEP_GetStats(pc, statsType, statsFlags));
+    return 1;
+}
+static int l_logrtcevent(lua_State *L)
+{
+    RTCPeerConnection* pc = (RTCPeerConnection*)lua_touserdata(L, 1);
+    const char* filename = lua_tolstring(L, 2, nullptr);
+    int max_size_mb = lua_tointegerx(L, 3, nullptr);
+    lua_pushinteger(L,JSEP_LogRtcEvent(pc, filename, max_size_mb));
+    return 1;
+}
+static int l_dumpaudioprocessing(lua_State *L)
+{
+    const char* filename = lua_tolstring(L, 1, nullptr);
+    int max_size_mb = lua_tointegerx(L, 2, nullptr);
+    lua_pushinteger(L,JSEP_DumpAudioProcessing(filename, max_size_mb));
+    return 1;
+}
+static int l_release(lua_State *L)
+{
+    RTCPeerConnection* pc = (RTCPeerConnection*)lua_touserdata(L, 1);
+    if (pc) luaL_unref(L, LUA_REGISTRYINDEX, (size_t)JSEP_Release(pc));
+    return 0;
+}
+
 static int l_ws_connect(lua_State *L)
 {
     const char* wsURL = lua_tolstring(L, 1, nullptr);
@@ -3720,13 +3941,41 @@ static int l_rs_send(lua_State *L)
 }
 static int l_mainloop(lua_State* L)
 {
-    MainThread::Instance().MainLoop();
-    MainThread::Instance().Terminate();
+    int funref = LUA_REFNIL;
+    std::function<bool(int)> func;
+    if (lua_isfunction(L, -1)) {
+        funref = luaL_ref(L, LUA_REGISTRYINDEX);
+        if (funref == LUA_REFNIL){
+            LOG(LS_ERROR) <<"luaL_ref failed";
+            return 0;
+        }
+        func = [=](int lIdleCount){
+            lua_rawgeti(_L, LUA_REGISTRYINDEX, funref);
+            lua_pushinteger(L, lIdleCount);
+            bool done = false;
+            if (lua_pcall(L, 1, 1, 0) != 0){
+                const char* err = lua_tolstring(_L, -1, nullptr);
+                fprintf(stderr, "Lua:%s\n", err);
+                LOG(LS_ERROR) << err;
+            }
+            else
+                done = lua_toboolean(L, -1) != 0;
+            lua_pop(_L, 1);
+            return done;//return TRUE if more idle processing
+        };
+    }
+    MainThread::Instance().MainLoop(func);
+    if (funref != LUA_REFNIL) luaL_unref(L, LUA_REGISTRYINDEX, funref);
     return 0;
 }
 static int l_mainquit(lua_State* L)
 {
     MainThread::Instance().Quit();
+    return 0;
+}
+static int l_terminate(lua_State* L)
+{
+    MainThread::Instance().Terminate();
     return 0;
 }
 template<typename T> struct luaL_Var {
@@ -3762,15 +4011,64 @@ JSEP_PUBLIC int luaopen_jsep (lua_State *L)
         {"RTCSocketEvent_Message", RTCSocketEvent_Message},
         {"RTCSocketEvent_StateChange", RTCSocketEvent_StateChange},
         {"RTCSocketEvent_IceCandidate", RTCSocketEvent_IceCandidate},
+
+        {"RTCStatsFlag_Debug", RTCStatsFlag_Debug},
+        {"RTCStatsFlag_Audio", RTCStatsFlag_Audio},
+        {"RTCStatsFlag_Video", RTCStatsFlag_Video},
+
+        {"RTCSessionEvent_RenegotiationNeeded", RTCSessionEvent_RenegotiationNeeded},
+        {"RTCSessionEvent_CreateDescriptionSuccess", RTCSessionEvent_CreateDescriptionSuccess},
+        {"RTCSessionEvent_CreateDescriptionFailure", RTCSessionEvent_CreateDescriptionFailure},
+        {"RTCSessionEvent_SetDescriptionSuccess", RTCSessionEvent_SetDescriptionSuccess},
+        {"RTCSessionEvent_SetDescriptionFailure", RTCSessionEvent_SetDescriptionFailure},
+        {"RTCSessionEvent_IceCandidate", RTCSessionEvent_IceCandidate},
+        {"RTCSessionEvent_IceConnectionStateChange", RTCSessionEvent_IceConnectionStateChange},
+        {"RTCSessionEvent_SignalingChange", RTCSessionEvent_SignalingChange},
+        {"RTCSessionEvent_AddRemoteStream", RTCSessionEvent_AddRemoteStream},
+        {"RTCSessionEvent_RemoveRemoteStream", RTCSessionEvent_RemoveRemoteStream},
+        {"RTCSessionEvent_ToneChange", RTCSessionEvent_ToneChange},
+        {"RTCSessionEvent_StatsReport", RTCSessionEvent_StatsReport},
+        {"RTCSessionEvent_DataChannelOpen", RTCSessionEvent_DataChannelOpen},
+        {"RTCSessionEvent_DataChannelMessage", RTCSessionEvent_DataChannelMessage},
+        {"RTCSessionEvent_DataChannelClose", RTCSessionEvent_DataChannelClose},
+
         {nullptr, 0}
     };
     const struct luaL_Reg funcs[] = {
         {"MainLoop", l_mainloop},
         {"MainQuit", l_mainquit},
+        {"Terminate", l_terminate},
+
         {"WebSocket_Connect", l_ws_connect},
         {"WebSocket_Listen", l_ws_listen},
         {"RTCSocket_Close", l_rs_close},
         {"RTCSocket_Send", l_rs_send},
+
+
+        {"JSEP_AddLocalStream", l_addlocalstream},
+        {"JSEP_RemoveLocalStream", l_removelocalstream},
+        {"JSEP_PublishRemoteStream", l_publishremotestream},
+
+        {"JSEP_CreateDataChannel", l_createdatachannel},
+        {"JSEP_CloseDataChannel", l_closedatachannel},
+        {"JSEP_SendMessage", l_sendmessage},
+
+        {"JSEP_RTCPeerConnection", l_pc},
+        {"JSEP_Release", l_release},
+
+        {"JSEP_CreateOffer", l_createoffer},
+        {"JSEP_CreateAnswer", l_createanswer},
+        {"JSEP_AddIceCandidate", l_addicecandidate},
+        {"JSEP_SetLocalDescription", l_setlocaldescription},
+        {"JSEP_SetRemoteDescription", l_setremotedescription},
+
+        {"JSEP_InsertDtmf", l_insertdtmf},
+        {"JSEP_SetBitrate", l_setbitrate},
+
+        {"JSEP_GetStats", l_getstats},
+        {"JSEP_LogRtcEvent", l_logrtcevent},
+        {"JSEP_DumpAudioProcessing", l_dumpaudioprocessing},
+
         {nullptr, nullptr},
     };
     lua_createtable(L, 0, 0);
