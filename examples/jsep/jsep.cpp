@@ -29,16 +29,18 @@
 #include <memory>
 #include <limits>
 #include <functional>
+#include <mutex>
 #include "jsep.h"
 #include "audio_device_external.h"
 #if defined _WIN32 || defined __CYGWIN__
 #include <wincrypt.h>
 #pragma warning(disable:4722)
+EXTERN_C IMAGE_DOS_HEADER __ImageBase;
 #endif
 #ifdef __APPLE__
 #include "webrtc/sdk/objc/Framework/Classes/VideoToolbox/videocodecfactory.h"
 #endif
-
+thread_local static std::string _lastErrorDescription;
 typedef int(*ZmfAudioOutputCallback)(void* pUser, const char* outputId, int iSampleRateHz, int iChannels,
     unsigned char *buf, int len);
 typedef void(*ZmfAudioInputCallback)(void* pUser, const char* inputId, int iSampleRateHz, int iChannels,
@@ -103,7 +105,7 @@ static void (*lua_pushlstring) (lua_State *L, const char *s, size_t l);
 static void (*lua_pushlightuserdata) (lua_State *L, void *p);
 static void (*lua_pushinteger) (lua_State *L, lua_Integer n);
 static void (*lua_createtable) (lua_State *L, int narr, int nrec);
-static void (*lua_setfield) (lua_State *L, int idx, const char *k);
+static void (*lua_settable) (lua_State *L, int idx);
 static void (*lua_rawgeti) (lua_State *L, int idx, int n);
 static int  (*lua_pcallk) (lua_State *L, int nargs, int nresults, int errfunc, void* ctx, void* k);
 static void (*lua_pushcclosure) (lua_State *L, lua_CFunction fn, int n);
@@ -186,6 +188,7 @@ static bool LocateZmfAudio()
     }
     do {
         if (GetProcAddress (me32.hModule, "Zmf_OnVideoCapture")) {
+retry:
 #endif
             FETCH_API(Zmf_OnAudioInput);
             FETCH_API(Zmf_OnAudioOutput);
@@ -208,6 +211,17 @@ static bool LocateZmfAudio()
 #ifdef _WIN32
         }
     } while (Module32Next (handle, &me32));
+    {
+        wchar_t buff[MAX_PATH];
+        memset(buff, 0, sizeof(buff));
+        ::GetModuleFileNameW((HINSTANCE)&__ImageBase, buff, MAX_PATH);
+        wchar_t* p = wcsrchr(buff, '\\');
+        if (!p) p = wcsrchr(buff, '/');
+        *p = 0;
+        wcscpy(p, L"\\zmf.dll");
+        me32.hModule = ::LoadLibraryW(buff);
+        if (me32.hModule) goto retry;
+    }
 #endif
 clean:
     CloseHandle (handle);
@@ -238,7 +252,7 @@ static bool LocateLua(lua_State *L)
             FETCH_API(lua_pushlightuserdata);
             FETCH_API(lua_pushinteger);
             FETCH_API(lua_createtable);
-            FETCH_API(lua_setfield);
+            FETCH_API(lua_settable);
             FETCH_API(lua_rawgeti);
             if (0 == (TRY_API(lua_tointegerx, "lua_tointegerx")))
                 FETCH_API2(lua_tointegerx, "lua_tointeger");
@@ -3529,7 +3543,7 @@ static int API_LEVEL_1_CompareJson(const JsonValue* token, const char* str, int 
 }
 static const JsonValue* API_LEVEL_1_ChildJson(const JsonValue* jsonValue, int index, const char* key, int n_key)
 {
-    static JsonValue NULL_JSON = {0, "", 0 , 0, -1};
+    static JsonValue NULL_JSON = {(enum JsonForm)0, "", 0 , 0, -1};
     if (!jsonValue || jsonValue->n_child <= 0) return &NULL_JSON;
     if (key) {
         if (jsonValue->type != JsonForm_Object) return &NULL_JSON;
@@ -3587,87 +3601,58 @@ WHOLE:
         return j;
     }
 }
-
+static const char* API_LEVEL_1_LastErrorDescription() { return _lastErrorDescription.c_str(); }
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-static void *_keyAPI = nullptr;
+static lua_State* _L = nullptr;
+static void InitOnce() {
+#if defined(_WIN32)
+    if (IsDebuggerPresent()) rtc::LogMessage::LogToDebug(rtc::LS_VERBOSE);
+#endif
+    const char* level = getenv("JSEP_LOG_TO_DEBUG");
+    if (level && level[0]) {
+        if (!strcmp(level, "INFO"))
+            rtc::LogMessage::LogToDebug(rtc::LS_INFO);
+        else if (!strcmp(level, "WARN"))
+            rtc::LogMessage::LogToDebug(rtc::LS_WARNING);
+        else if (!strcmp(level, "ERROR"))
+            rtc::LogMessage::LogToDebug(rtc::LS_ERROR);
+        else if (!strcmp(level, "VERBOSE"))
+            rtc::LogMessage::LogToDebug(rtc::LS_VERBOSE);
+        else if (!strcmp(level, "SENSITIVE"))
+            rtc::LogMessage::LogToDebug(rtc::LS_SENSITIVE);
+    }
+    const char* dirPath = getenv("JSEP_LOG_DIR_PATH");
+    if (dirPath && dirPath[0]) {
+        static rtc::CallSessionFileRotatingLogSink sink(dirPath, 10 * 1024 * 1024);
+        if (sink.Init())
+            rtc::LogMessage::AddLogToStream(&sink, rtc::LS_SENSITIVE);
+        else
+            LOG(LS_ERROR) << "Invalid JSEP_LOG_DIR_PATH: " << dirPath;
+    }
+    if (!LocateZmfAudio())
+        LOG(LS_ERROR) << "attach ZmfAudio failed";
+    if (!LocateZmfVideo())
+        LOG(LS_ERROR) << "attach ZmfVideo failed";
+    if (_L)
+        LOG(LS_INFO) << "LUA_REGISTRYINDEX = " << LUA_REGISTRYINDEX;
+}
+struct JsepApiContext {
+    int apiLevel;
+    JSEP_API api;
+    JsepApiContext():apiLevel(0){}
+};
 const JSEP_API* JsepAPI(int apiLevel)
 {
-    if (!_keyAPI) {
-#if defined(_WIN32)
-        if (IsDebuggerPresent()) rtc::LogMessage::LogToDebug(rtc::LS_VERBOSE);
-        static DWORD dwTlsIndex;
-        if ((dwTlsIndex = TlsAlloc()) != TLS_OUT_OF_INDEXES)
-            _keyAPI = &dwTlsIndex;
-        else
-            fprintf(stderr, "TlsAlloc Last Error=%d\n", GetLastError());
-#else
-        static pthread_key_t key;
-        int ret = pthread_key_create(&key, nullptr);
-        if (ret == 0)
-            _keyAPI = &key;
-        else if (ret == EAGAIN)
-            fprintf(stderr, "Lacked the necessary resources to create thread key\n");
-        else if (ret == ENOMEM)
-            fprintf(stderr, "Insufficient memory exists to create the key\n");
-        else
-            fprintf(stderr, "pthread_key_create ret=%d\n", ret);
-#endif
-        if (!_keyAPI) {
-            fprintf(stderr, "create thread key failed\n");
-            return nullptr;
-        }
-        const char* level = getenv("JSEP_LOG_TO_DEBUG");
-        if (level && level[0]) {
-            if (!strcmp(level, "INFO"))
-                rtc::LogMessage::LogToDebug(rtc::LS_INFO);
-            else if (!strcmp(level, "WARN"))
-                rtc::LogMessage::LogToDebug(rtc::LS_WARNING);
-            else if (!strcmp(level, "ERROR"))
-                rtc::LogMessage::LogToDebug(rtc::LS_ERROR);
-            else if (!strcmp(level, "VERBOSE"))
-                rtc::LogMessage::LogToDebug(rtc::LS_VERBOSE);
-            else if (!strcmp(level, "SENSITIVE"))
-                rtc::LogMessage::LogToDebug(rtc::LS_SENSITIVE);
-        }
-        const char* dirPath = getenv("JSEP_LOG_DIR_PATH");
-        if (dirPath && dirPath[0]) {
-            static rtc::CallSessionFileRotatingLogSink sink(dirPath, 10 * 1024 * 1024);
-            if (sink.Init())
-                rtc::LogMessage::AddLogToStream(&sink, rtc::LS_SENSITIVE);
-            else
-                LOG(LS_ERROR) << "Invalid JSEP_LOG_DIR_PATH: " << dirPath;
-        }
-        if (!LocateZmfAudio())
-            LOG(LS_ERROR) << "attach ZmfAudio failed";
-        if (!LocateZmfVideo())
-            LOG(LS_ERROR) << "attach ZmfVideo failed";
-        if (lua_pushcclosure)
-            LOG(LS_INFO) << "LUA_REGISTRYINDEX = " << LUA_REGISTRYINDEX;
-    }
+    static std::once_flag _init;
+    std::call_once(_init, InitOnce);
     if (apiLevel  < 1|| apiLevel > _BUILD_JSEP_API_LEVEL__) {
         LOG(LS_ERROR) <<"Invalid JSEP_API_LEVEL: " << apiLevel;
         return nullptr;
     }
-#if defined(_WIN32)
-    JSEP_API* api = (JSEP_API*)TlsGetValue(*(DWORD*)_keyAPI);
-#else
-    JSEP_API* api = (JSEP_API*)pthread_getspecific(*(pthread_key_t*)_keyAPI);
-#endif
-    if (!api) {
-        int* ptr = (int*)calloc(1, sizeof(int)+sizeof(JSEP_API));
-        if (!ptr) {
-            LOG(LS_ERROR) <<"calloc JSEP_API failed";
-            return nullptr;
-        }
-        api = (JSEP_API*)(&ptr[1]);
-#if defined(_WIN32)
-        TlsSetValue(*(DWORD*)_keyAPI, api);
-#else
-        pthread_setspecific(*(pthread_key_t*)_keyAPI, api);
-#endif
-    }
-    if (((int*)api)[-1] != apiLevel) {
-        ((int*)api)[-1] = apiLevel;
+    thread_local static JsepApiContext ctx;
+    JSEP_API *api = &ctx.api;
+    if (ctx.apiLevel != apiLevel) {
+        ctx.apiLevel = apiLevel;
         api->AddIceCandidate = API_LEVEL_1_AddIceCandidate;
         api->AddLocalStream = API_LEVEL_1_AddLocalStream;
         api->CloseDataChannel = API_LEVEL_1_CloseDataChannel;
@@ -3686,6 +3671,7 @@ const JSEP_API* JsepAPI(int apiLevel)
         api->LogRtcEvent = API_LEVEL_1_LogRtcEvent;
         api->SetBitrate = API_LEVEL_1_SetBitrate;
         api->DumpAudioProcessing = API_LEVEL_1_DumpAudioProcessing;
+        api->LastErrorDescription = API_LEVEL_1_LastErrorDescription;
 
         api->CreateWebSocket = API_LEVEL_1_CreateWebSocket;
         api->CreateWebSocketServer = API_LEVEL_1_CreateWebSocketServer;
@@ -3702,7 +3688,6 @@ const JSEP_API* JsepAPI(int apiLevel)
     }
     return api;
 }
-static lua_State* _L;
 static void l_ws_observer(RTCSocketObserver* userdata, RTCSocket* rtcsocket, const char* message, int length, enum RTCSocketEvent event)
 {
     lua_rawgeti(_L, LUA_REGISTRYINDEX, (size_t)userdata);
@@ -3854,6 +3839,11 @@ static int l_setbitrate(lua_State *L)
     lua_pushinteger(L,JSEP_SetBitrate(pc,current_bitrate_bps,max_bitrate_bps,min_bitrate_bps));
     return 1;
 }
+static int l_lasterrordescription(lua_State *L)
+{
+    lua_pushlstring(L, _lastErrorDescription.c_str(), _lastErrorDescription.size());
+    return 1;
+}
 static int l_getstats(lua_State *L)
 {
     RTCPeerConnection* pc = (RTCPeerConnection*)lua_touserdata(L, 1);
@@ -3978,6 +3968,70 @@ static int l_terminate(lua_State* L)
     MainThread::Instance().Terminate();
     return 0;
 }
+typedef std::vector<JsonValue>::const_iterator json_t;
+static json_t l_obj(lua_State *L, json_t t, json_t e);
+static json_t l_map(lua_State *L, json_t t, json_t e, int size)
+{
+    lua_createtable(L, 0, size);
+    for(int i=0; i<size && t < e; ++i){
+        lua_pushlstring(L, t->json, t->n_json);
+        t = l_obj(L, t+1, e);
+        lua_settable (L, -3);
+    }
+    return t;
+}
+static json_t l_vec(lua_State *L, json_t t, json_t e, int size)
+{
+    lua_createtable(L, size, 0);
+    for(int i=0;i<size && t < e;++i) {
+        lua_pushinteger(L, i+1);/* Array starting with 1 */
+        t = l_obj(L, t, e);
+        lua_settable (L, -3);
+    }
+    return t;
+}
+static json_t l_obj(lua_State *L, json_t t, json_t e)
+{
+    switch(t->type) {
+    case JsonForm_Object:
+        return l_map(L, t+1, e, t->n_child);
+    case JsonForm_Array:
+        return l_vec(L, t+1, e, t->n_child);
+    case JsonForm_Primitive:
+    case JsonForm_String:
+        lua_pushlstring(L, t->json, t->n_json);
+        return t+1;
+    default:
+        return e;
+    }
+}
+static int
+l_table(lua_State *L, const std::vector<JsonValue>& vals)
+{
+    if (vals.empty()) return 0;
+    auto t = vals.begin();
+    auto e = vals.end(); 
+    if (t->type != JsonForm_Object && t->n_child <= 1) {
+        auto pColon = strchr(t->json, ':');
+        auto pComma = strchr(t->json, ',');
+        if (!pColon) pColon = t->json+t->n_json;
+        if (!pComma) pComma = t->json+t->n_json;
+        if (pColon < pComma)
+            t = l_map(L, t, e, (int)vals.size());
+        else 
+            t = l_vec(L, t, e, (int)vals.size());
+    }
+    else 
+        t = l_obj(L, t, e);
+    if (t != e) return 0;
+    return 1;
+}
+
+static int l_json2table(lua_State *L)
+{
+    return l_table(L, JsonValue::parse(lua_tolstring(L, 1, nullptr)));
+}
+
 template<typename T> struct luaL_Var {
     const char* name;
     T           value;
@@ -4038,6 +4092,7 @@ JSEP_PUBLIC int luaopen_jsep (lua_State *L)
         {"MainLoop", l_mainloop},
         {"MainQuit", l_mainquit},
         {"Terminate", l_terminate},
+        {"Json2Table", l_json2table},
 
         {"WebSocket_Connect", l_ws_connect},
         {"WebSocket_Listen", l_ws_listen},
@@ -4064,6 +4119,7 @@ JSEP_PUBLIC int luaopen_jsep (lua_State *L)
 
         {"JSEP_InsertDtmf", l_insertdtmf},
         {"JSEP_SetBitrate", l_setbitrate},
+        {"JSEP_LastErrorDescription", l_lasterrordescription},
 
         {"JSEP_GetStats", l_getstats},
         {"JSEP_LogRtcEvent", l_logrtcevent},
@@ -4074,21 +4130,22 @@ JSEP_PUBLIC int luaopen_jsep (lua_State *L)
     lua_createtable(L, 0, 0);
 
     for (int i=0; str_vars[i].name; ++i) {
+        lua_pushlstring (L, str_vars[i].name, strlen(str_vars[i].name));
         lua_pushlstring (L, str_vars[i].value, strlen(str_vars[i].value));
-        lua_setfield (L, -2, str_vars[i].name);
+        lua_settable(L, -3);
     }
 
     for (int i=0; int_vars[i].name; ++i) {
+        lua_pushlstring (L, int_vars[i].name, strlen(int_vars[i].name));
         lua_pushinteger (L, int_vars[i].value);
-        lua_setfield (L, -2, int_vars[i].name);
+        lua_settable(L, -3);
     }
 
     for (int i=0; funcs[i].name; ++i) {
+        lua_pushlstring (L, funcs[i].name, strlen(funcs[i].name));
         lua_pushcclosure(L, funcs[i].func, 0);
-        lua_setfield(L, -2, funcs[i].name);
+        lua_settable(L, -3);
     }
     _L = L;
-    if (_keyAPI)
-        LOG(LS_INFO) << "LUA_REGISTRYINDEX = " << LUA_REGISTRYINDEX;
     return 1;
 }

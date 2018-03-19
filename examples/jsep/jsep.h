@@ -1032,6 +1032,13 @@ typedef struct RTCSocketObserver  RTCSocketObserver;
 #define JSEP_SetBitrate(iface, current_bitrate_bps, max_bitrate_bps, min_bitrate_bps) \
     JsepAPI(JSEP_API_LEVEL)->SetBitrate(iface, current_bitrate_bps, max_bitrate_bps, min_bitrate_bps)
 
+/**
+ * 返回最近出错的描述
+ *
+ * @return 返回描述字符串,若无出错, 则是""
+ */
+#define JSEP_LastErrorDescription() JsepAPI(JSEP_API_LEVEL)->LastErrorDescription()
+
 /** @} */
 ////////////////////////////////////////////////////////////////////////////////
 /**
@@ -1335,6 +1342,8 @@ typedef struct {
     const JsonValue* (JSEP_CDECL_CALL *ChildJson)(const JsonValue* jsonValue, int index, const char* key, int n_key);
     int (JSEP_CDECL_CALL *CompareJson)(const JsonValue* jsonValue, const char* str, int n_str);
     int (JSEP_CDECL_CALL *UnescapeJson)(const JsonValue* jsonValue, char* buf);
+
+    const char* (JSEP_CDECL_CALL *LastErrorDescription)();
 } JSEP_API;
 
 #if defined(JSEP_IMPORT) || defined(_BUILD_JSEP_API_LEVEL__)
@@ -1407,7 +1416,7 @@ JSEP_INLINE const JSEP_API* JsepAPI(int apiLevel) {
  * @param[in] end 在完整的JSON字符串的结束位置
  */
 struct JsonValue {
-    int /*enum JsonForm*/ type;
+    enum JsonForm type;
     const char* json;
     int n_json;
     int n_child;
@@ -1445,7 +1454,10 @@ struct JsonValue {
             if (ret == JsonError_Insufficient)
                 vals.resize(vals.size()*2);
             else{
-                if (ret < 0) vals.clear();
+                if (ret < 0)
+                    vals.clear();
+                else
+                    vals.resize(ret);
                 break;
             }
         } while (1);
