@@ -763,17 +763,21 @@ public:
         return new cricket::BasicPortAllocator(networkManager_.get(), socketFactory_.get());
     }
     webrtc::PeerConnectionFactoryInterface* AddRefFactory(bool zmfAudioPump) {
-        if (!peerFactory_){
+        if (!peerFactory_) {
             workThread_.Start();
-            adm_ = (webrtc::AudioDeviceModule*)WorkThreadCall([zmfAudioPump]{
-                auto adm = webrtc::AudioDeviceModuleExternal::Create(0, zmfAudioPump ? kBuiltInAudioDevice : nullptr);
-                return  adm.release();
-            });
-            if (!adm_) {
-                LOG(LS_ERROR) << "AudioDeviceModule Create failed";
-                workThread_.Stop();
-                return nullptr;
+            if (IsZmfAudioSupport()) {
+                adm_ = (webrtc::AudioDeviceModule*)WorkThreadCall([zmfAudioPump]{
+                    auto adm = webrtc::AudioDeviceModuleExternal::Create(0, zmfAudioPump ? kBuiltInAudioDevice : nullptr);
+                    return  adm.release();
+                });
+                if (!adm_) {
+                    LOG(LS_ERROR) << "AudioDeviceModule Create failed";
+                    workThread_.Stop();
+                    return nullptr;
+                }
             }
+            else
+                zmfAudioPump = false;
             cricket::WebRtcVideoEncoderFactory* encoder_factory = nullptr;
             cricket::WebRtcVideoDecoderFactory* decoder_factory = nullptr;
 #ifdef __APPLE__
@@ -2189,7 +2193,6 @@ static RTCPeerConnection* API_LEVEL_1_CreatePeerConnection(const char* config, i
         LOG(LS_ERROR) << "JSEP_RTCPeerConnection invalid param";
         return nullptr;
     }
-    if (!IsZmfAudioSupport()) zmfAudioPump = 0;
     auto factory = MainThread::Instance().AddRefFactory(zmfAudioPump != 0);
     if (!factory) return nullptr;
 
