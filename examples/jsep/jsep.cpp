@@ -964,7 +964,7 @@ public:
             for (size_t i=0;i<size;++i)
                 p[i] = data[i] ^ masking_key[i & 0x3];
         }
-        else
+        else if (size > 0)
             memcpy(p, data, size);
         return DirectSend(&tmp[0], (p - &tmp[0]) + size);
     }
@@ -2582,7 +2582,7 @@ struct RTCSocket
     RTCSocketObserver* observer_; 
     SocketCallback  callback_;
     RTCSocket(RTCSocketObserver* observer, SocketCallback callback):observer_(observer), callback_(callback){}
-    virtual int Send(const char* message, int length) = 0;
+    virtual int Send(const char* message, int length, int sendFlags) = 0;
     virtual void Close() = 0;
     virtual ~RTCSocket(){}
 };
@@ -2642,8 +2642,9 @@ struct WebSocket : public RTCSocket, public sigslot::has_slots<>, public rtc::Me
             MainThread::Instance().PostDelayed(RTC_FROM_HERE, cmsDelay, this, MSG_FORCE_CLOSE);
         return socket_.AcceptClient(hostname);
     }
-    virtual int Send(const char* message, int length) override {
-        return socket_.Send(message, length);
+    virtual int Send(const char* message, int length, int sendFlags) override {
+        const int type = (sendFlags&RTCSocketFlag_Binary) ? AsyncWebSocket::BINARY_FRAME : AsyncWebSocket::TEXT_FRAME;
+        return socket_.SendPacket(type, message, length, (sendFlags & RTCSocketFlag_Masking) != 0);
     }
     virtual void Close() override { 
         callback_ = nullptr; 
@@ -2717,8 +2718,8 @@ struct WebSocketServer : public RTCSocket, public sigslot::has_slots<> {
         else if (observer_)
             observer_->OnSocketStateChange(rs, state.c_str());
     }
-    virtual int Send(const char* message, int length) override {
-        for (auto ws : children_) ws->Send(message, length);
+    virtual int Send(const char* message, int length, int sendFlags) override {
+        for (auto ws : children_) ws->Send(message, length, sendFlags);
         return 0;
     }
     virtual void Close() override {
@@ -2832,7 +2833,7 @@ struct IceSocket : public RTCSocket, public sigslot::has_slots<>, public rtc::Me
                 (rtc::MessageData*)new cricket::IceParameters(ice_param));
         return 0;
     }
-    virtual int Send(const char* message, int length) override {
+    virtual int Send(const char* message, int length, int sendFlags) override {
         if (MainThread::Instance().NetThread().IsCurrent())
             return ice_->SendPacket(message, length, packetOptions_);
 
@@ -2850,14 +2851,12 @@ struct IceSocket : public RTCSocket, public sigslot::has_slots<>, public rtc::Me
             MainThread::Instance().NetThread().Post(RTC_FROM_HERE, this, MSG_CLOSE_SELF);
     }
 };
-static int API_LEVEL_1_SendSocket(RTCSocket* rs, const char* message, int length)
+static int API_LEVEL_1_SendSocket(RTCSocket* rs, const char* message, int length, int sendFlags)
 {
     if (!rs || !message) return RTCSessionError_InvalidArgument;
-    if (length <= 0) {
-        length = (int)strlen(message);
-        if (!length) return 0;
-    }
-    return rs->Send(message, length);
+    if (length <= 0)
+        length = (message ? (int)strlen(message) : 0);
+    return rs->Send(message, length, sendFlags);
 }
 static RTCSocketObserver* API_LEVEL_1_CloseSocket(RTCSocket* rs)
 {
@@ -3929,7 +3928,8 @@ static int l_rs_send(lua_State *L)
     RTCSocket* rs = (RTCSocket*)lua_touserdata(L, 1);
     if (!rs) return 0;
     const char* str = lua_tolstring(L, 2, &len);
-    lua_pushinteger(L, RTCSocket_Send(rs, str, len));
+    int sendFlags = lua_tointegerx(L, 3, nullptr);
+    lua_pushinteger(L, RTCSocket_Send(rs, str, len, sendFlags));
     return 1;
 }
 static int l_mainloop(lua_State* L)

@@ -65,7 +65,7 @@ public static class JSEP
         public int Send(string message)
         {
             byte[] buffer = Encoding.UTF8.GetBytes(message);
-            return JSEP._SendSocket(iface, buffer, buffer.Length);
+            return JSEP._SendSocket(iface, buffer, buffer.Length, 0);
         }
     }
 
@@ -810,7 +810,7 @@ public static class JSEP
     private delegate IntPtr PFN_CloseSocket(IntPtr iface);
 
     [UnmanagedFunctionPointer(JSEP_CALL)]
-    private delegate int PFN_SendSocket(IntPtr iface, byte[] buffer, int length);
+    private delegate int PFN_SendSocket(IntPtr iface, byte[] buffer, int length, int sendFlags);
 
     [UnmanagedFunctionPointer(JSEP_CALL,CharSet = CharSet.Ansi)]
     private delegate int PFN_AddSocketIceCandidate(IntPtr iface, string candidate);

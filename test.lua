@@ -42,7 +42,7 @@ local function sendSignaling(kind, key, val, toId)
         "shareid":"%s",
         "%s":%s
     }]], kind, _myId, toId or _toId, _shareid, key, val)
-    RTCSocket_Send(_ws, json);
+    RTCSocket_Send(_ws, json, 0);
 end
 local function onSignaling(json)
     --print ('<<' .. json.type)
@@ -123,7 +123,7 @@ local function onmessage(ws, msg, evt)
             return MainQuit()
         elseif s == 'open' then
             print'WS onopen'
-            RTCSocket_Send(_ws, string.format('{"from":"%s"}', _myId))
+            RTCSocket_Send(_ws, string.format('{"from":"%s"}', _myId), 0)
             call("stun:test@115.29.4.150:3478", "", false, "240")
         end
     elseif evt == RTCSocketEvent_Message then

@@ -126,7 +126,7 @@ void JsepClient::sendSignaling(const std::string& type, const std::string& key, 
         oss << json;
     if (type == "sdp") oss << ",\"shareid\":\"" << m_localShareId << "\"";
     oss << "}";
-    RTCSocket_Send(m_ws, oss.str().c_str(), 0);
+    RTCSocket_Send(m_ws, oss.str().c_str(), 0, 0);
     if (type == "sdp")
         m_view->Trace(">>sdp");
     else
@@ -135,7 +135,7 @@ void JsepClient::sendSignaling(const std::string& type, const std::string& key, 
 void JsepClient::Send(const std::string& message, const std::string& toId) {
     if (m_is){
         m_view->Trace("->%s", message.c_str());
-        RTCSocket_Send(m_is, message.c_str(), 0);
+        RTCSocket_Send(m_is, message.c_str(), 0, 0);
     }
     else if (m_channelId.size()){
         m_view->Trace("=>%s", message.c_str());
@@ -454,7 +454,7 @@ void JsepClient::OnWebSocketOpen(){
     m_view->Trace("WS onopen");
     std::ostringstream oss;
     oss << "{\"from\":\"" << m_myId << "\"}";
-    RTCSocket_Send(m_ws, oss.str().c_str(), 0);
+    RTCSocket_Send(m_ws, oss.str().c_str(), 0, 0);
     m_view->OnOpen();
 }
 void JsepClient::OnWebSocketClose(){

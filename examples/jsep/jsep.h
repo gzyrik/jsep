@@ -367,6 +367,13 @@ enum RTCSocketEvent {
     /** 获取新的本地候选地址, 其数据为候选地址. 对应 RTCSocketObserver::OnSocketIceCandidate */
     RTCSocketEvent_IceCandidate,
 };
+enum RTCSocketFlag {
+    /** 二进制消息 */
+    RTCSocketFlag_Binary = 1,
+    /** WebSocket 使用 Masking */
+    RTCSocketFlag_Masking= 2,
+};
+
 ////////////////////////////////////////////////////////////////////////////////
 /**
  * GetStats接口的参数
@@ -1123,13 +1130,14 @@ typedef struct RTCSocketObserver  RTCSocketObserver;
  * @param[in] rtcSocket RTCSocket实例
  * @param[in] message 消息
  * @param[in] length 消息长度,非正数,则表示message字符串长度
+ * @param[in] sendFlags 发送标识, @see RTCSocketFlag
  *
  * @return 成功返回发送长度,反之错误码
  *
  * @remarks
  */
-#define RTCSocket_Send(rtcSocket, message, length) \
-    JsepAPI(JSEP_API_LEVEL)->SendSocket(rtcSocket, message, length)
+#define RTCSocket_Send(rtcSocket, message, length, sendFlags) \
+    JsepAPI(JSEP_API_LEVEL)->SendSocket(rtcSocket, message, length, sendFlags)
 
 /**
  * 添加对端的ICE地址
@@ -1331,7 +1339,7 @@ typedef struct {
         void (JSEP_CDECL_CALL *observer)(RTCSocketObserver* userdata, RTCSocket* rtcsocket, const char* message, int length, enum RTCSocketEvent event));
 
     RTCSocketObserver* (JSEP_CDECL_CALL *CloseSocket)(RTCSocket* rtcsocket);
-    int (JSEP_CDECL_CALL *SendSocket)(RTCSocket* rtcsocket, const char* message, int length);
+    int (JSEP_CDECL_CALL *SendSocket)(RTCSocket* rtcsocket, const char* message, int length, int sendFlags);
 
     // ice socket
     int (JSEP_CDECL_CALL *AddSocketIceCandidate)(RTCSocket* rtcsocket, const char* candidate);

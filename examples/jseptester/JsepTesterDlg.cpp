@@ -450,12 +450,12 @@ void CJsepTesterDlg::OnSocketMessage(RTCSocket* rs, const char* buffer, int leng
         if (iter != m_clients.end()){
             const std::string& type = json["type"];
             Trace("*WS:[%s]>[%s]:%s", from.c_str(), to.c_str(), type.c_str());
-            RTCSocket_Send(iter->second, buffer, length);
+            RTCSocket_Send(iter->second, buffer, length, 0);
         }
         else {
             const std::string cmd("{ \"txt\":\"hangup\", \"type\" : \"cmd\" }");
             Trace("*WS:%s to invalid Peer: %s", from.c_str(), to.c_str());
-            RTCSocket_Send(rs, cmd.data(), cmd.size()); 
+            RTCSocket_Send(rs, cmd.data(), cmd.size(), 0); 
         }
     }
 }
