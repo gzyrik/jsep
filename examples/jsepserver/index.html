@@ -15,7 +15,7 @@ li {list-style-type:none;margin:2px;background-color:purple;color:white;border:1
 <table>
     <tr><td>WS:</td><td><input type="text" id="ws" value="ws://192.168.0.240:7000" /></td>
         <td rowspan="4" colspan="3" style="padding:0;">
-            <video id="localVideo" autoplay style="padding:0;height:120px;"></video>
+            <video id="localVideo" autoplay playsInline muted style="padding:0;height:120px;"></video>
         </td>
     </tr><tr>
         <td>Account:</td><td><input type="text" id="uid" value=""/></td>
@@ -30,11 +30,11 @@ li {list-style-type:none;margin:2px;background-color:purple;color:white;border:1
     </tr><tr>
         <td>ConfPwd:</td><td><input type="text" id="confpwd" value="123456"/><td>
     </tr><tr>
-        <td>Stun:</td><td><input type="text" id="stun" value="stun:stun.l.google.com:19302" /></td>
+        <td>Stun:</td><td><input type="text" id="stun" value="stun:115.29.4.150:3478" /></td>
     </tr><tr>
-        <td>StunId:</td><td><input type="text" id="stunid" value=""/></td>
+        <td>StunId:</td><td><input type="text" id="stunid" value="test"/></td>
     </tr><tr>
-        <td>StunPwd:</td><td><input type="text" id="stunpwd" value=""/></td>
+        <td>StunPwd:</td><td><input type="text" id="stunpwd" value="test"/></td>
     </tr><tr>
         <td>resolution:</td><td><select id="resolution" onchange="setmerge_i();"><option value="1">90P</option><option value="2">180P</option><option value="3" selected="selected">360P</option><option value="4">720P</option><option value="5">1080P</option><option value="6">No Video</option></select></td>
     </tr><tr>
@@ -55,7 +55,7 @@ li {list-style-type:none;margin:2px;background-color:purple;color:white;border:1
 <button id="call" disabled="true" onclick="call();">Call</button>
 <pre id="debug"></pre>
 </body>
-<script src="webrtc.min.js"></script>
+<script src="webrtc.js"></script>
 <script>
 'use strict';
 function $(id){ return document.getElementById(id) }
@@ -323,15 +323,17 @@ function connect() {
         call();
     }
     _jc.onhangup = hangup;
-    _jc.onremovestream = function(stream, type) {
+    _jc.onremovestream = function(id, type) {
         if (type == 'localshare')
             $("share").checked = false;
         else if (type == 'localvideo'){
             $("video").checked = false;
             $("localVideo").srcObject = null;
         }
-        else
-            $("remoteVideo").removeChild($(stream.id));
+        else {
+            id = $(id)
+            if (id) $("remoteVideo").removeChild(id);
+        }
     }
     _jc.onaddstream = function(stream, type) {
         if (type == 'localshare')
@@ -352,6 +354,7 @@ function connect() {
             view.id = id;
             view.srcObject = stream;
             view.autoplay = true;
+            view.playsInline = true;
             $("remoteVideo").appendChild(view);
         }
     }
@@ -374,13 +377,14 @@ function hangup() {
     $("call").onclick = call;
 }
 function constraints() {
-    var val={ "audio": $("audio").checked };
+    var val={ "audio": $("audio").checked, "video": $("video").checked };
+    /*
     if ($("video").checked) {
         val.video = {
             "width": {"max": 640},
             "height":{"max": 480},
         }
-    }
+    }*/
     return val;
 }
 function call() {

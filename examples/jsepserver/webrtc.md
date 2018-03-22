@@ -173,8 +173,8 @@
 ### 媒体被移除
 需要移除对应的DOM元素
 
-        onremovestream(stream, type)
-        stream  为标准 MediaStream 实例,
+        onremovestream(id, type)
+        id      MediaStream的id
         type    参考文档下方说明
 
 ### 媒体已添加

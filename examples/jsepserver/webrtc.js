@@ -1,6 +1,6 @@
 var WebRTC = function(config, trace) {
     'use strict';
-    if (!this || this == window) return "17120702";
+    if (!this || this == window) return "18032201";
     if (typeof config != 'object') throw new Error("invalid config");
     var _html_getsourceid = 'https://www.webrtc-experiment.com/getSourceId/';
     var _id = config.id;
@@ -145,29 +145,20 @@ var WebRTC = function(config, trace) {
             trace("&gt&gt"+json.type);
     }
     function sendCustomMessage(text, peer) {
-        if (_pc && _pc.dc)
+        if (_pc && _pc.dc && _pc.dc.readyState == 'open')
             _pc.dc.send(text);
         else
             sendSingalingMessage({'txt':text,'type':'msg'}, peer);
     }
     function _hungup(){
         if (_pc.heart) clearTimeout(_pc.heart);
-        var streams = _pc.getLocalStreams();
-        for (var i=0,len=streams.length;i<len;++i){
-            var tracks = streams[i].getTracks();
-            for(var j=0,len2=tracks.length;j<len2;++j) tracks[j].stop();
-            if (_pc.removeStream) try{
-                _pc.removeStream(streams[i]); 
-            } catch(e){}
-        }
-        if (_pc.senders) try{
-            for(var i=0,len=_pc.senders.length;i<len;++i) _pc.removeTrack(_pc.senders[i]);
-        } catch(e){}
-        _pc.close();
-        _answer = _pc = null;
+        _pc.dc = null;
         _rtc.share = null;
         _rtc.update = null;
         _rtc.mute = null;
+        _resetLocalStream(true);
+        _pc.close();
+        _answer = _pc = null;
         trace('hangup ok');
     }
     function onSignalingMessage(str) {
@@ -197,9 +188,27 @@ var WebRTC = function(config, trace) {
             if (json.ice)
                 _pc.addIceCandidate(new RTCIceCandidate(json.ice));
             if (json.sdp){
-                if (isstring(json.shareid)) _pc.remoteStreamTypes[json.shareid]='peershare';
+                var i;
+                if (_rtc.onremovestream && isstring(json.mediaid)) {
+                    for (i in _pc.remoteStreamTypes) {
+                        if (i != json.mediaid && i != json.shareid) {
+                            _rtc.onremovestream(i, _pc.remoteStreamTypes[i]);
+                            delete _pc.remoteStreamTypes[i];
+                        }
+                    }
+                }
+                if (isstring(json.shareid))
+                    _pc.remoteStreamTypes[json.shareid]='peershare';
+                else if (_rtc.onremovestream) {
+                    for (i in _pc.remoteStreamTypes){
+                        if (_pc.remoteStreamTypes[i] == 'peershare') {
+                            _rtc.onremovestream(i, 'peershare');
+                            delete _pc.remoteStreamTypes[i];
+                        }
+                    }
+                }
                 var desc = new RTCSessionDescription(json.sdp);
-                _pc.setRemoteDescription(desc, function(){onSetSdpSuccess(desc.type, "remote", desc);}, onerror);
+                _pc.setRemoteDescription(desc, function(){if(_pc)onSetSdpSuccess(desc.type, "remote", desc);}, onerror);
             }
         } catch(e) { return onerror(e); }
     }
@@ -231,14 +240,18 @@ var WebRTC = function(config, trace) {
 
     function onSetSdpSuccess(type, locate, desc) {
         trace("set "+type+" into " + locate + " ok");
-        if (locate == "local")
-            sendSingalingMessage({'sdp':desc,'type':'sdp', 'shareid':_pc.localShareId}, _pc.peer);
-        if (type == "offer" && locate == "remote"){
-            if (_pc.localVideoStream) _pc.onnegotiationneeded();
+        if (locate == "local") {
+            sendSingalingMessage({
+                'sdp':desc,'type':'sdp',
+                'shareid':_pc.localShareId,
+                'mediaid':(_pc.localStream?_pc.localStream.id:'')
+            }, _pc.peer);
         }
+        if (type == "offer" && locate == "remote")
+            _pc.onnegotiationneeded();
     }
     function onCreateSdpSuccess(desc) {
-        _pc.setLocalDescription(desc, function(){ onSetSdpSuccess(desc.type, "local", desc);}, onerror);
+        _pc.setLocalDescription(desc, function(){if(_pc)onSetSdpSuccess(desc.type, "local", desc);}, onerror);
     }
     function hangup() {
         if (!_pc) return;
@@ -262,7 +275,7 @@ var WebRTC = function(config, trace) {
             if (url){
                 var xhr = new XMLHttpRequest();
                 xhr.onreadystatechange = function () { if (xhr.readyState != 4 ) return;
-                    trace("http-delete " + (xhr.status == 200 ? "ok" :  "failed"));
+                    trace("http-delete " + (xhr.status == 200 ? "ok" : "failed"));
                 };
                 trace("DELETE " + url);
                 xhr.open("DELETE", url, true);
@@ -272,8 +285,10 @@ var WebRTC = function(config, trace) {
     }
     ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
     function onDataChannel(dc) {
+        if (!_pc) return;
+        _pc.dc = dc;
         dc.onmessage = function (event) { if (_pc) _rtc.onmessage(event.data, _pc.peer); };
-        dc.onopen = function () {trace('dc onopen'); _pc.dc = dc; };
+        dc.onopen = function () { trace('dc onopen'); };
         dc.onclose = function () { trace('dc onclose'); if (_pc) _pc.dc = null; };
     }
     function onNegotiationNeeded() {
@@ -288,35 +303,32 @@ var WebRTC = function(config, trace) {
         else if (state != "closed" && state != "have-local-offer")
             _pc.heart = setTimeout(onNegotiationNeeded, 1000);
     }
-    function _resetLocalStream() {
+    function _resetLocalStream(closing) {
         if (!_pc) return;
-        if (!_pc.localVideoStream){
-            _pc.localVideoStream = new MediaStream();
-            if (!_answer) onDataChannel(_pc.createDataChannel("data channel"));
+        _pc.dtmf = null;
+        _rtc.dtmf = null;
+        if (_pc.localStream) {
+            if (!closing && _rtc.onremovestream && _pc.localStream.getVideoTracks().length > 0)
+                _rtc.onremovestream(_pc.localStream.id, 'localvideo');
+            var tracks = _pc.localStream.getTracks();
+            for(var j=0,len=tracks.length;j<len;++j) tracks[j].stop();
+            _pc.localStream = null;
         }
-        else {
-            _pc.dtmf = null;
-            _rtc.dtmf = null;
-            if (_pc.localVideoStream.getVideoTracks().length > 0)
-                _rtc.onremovestream(_pc.localVideoStream, 'localvideo');
-            var streams = _pc.getLocalStreams();
-            for (var i=0,len=streams.length;i<len;++i){
-                var s = streams[i];
-                if (_shareStream != s) {
-                    var tracks = s.getTracks();
-                    for(var j=0,len2=tracks.length;j<len2;++j) {
-                        var t = tracks[j];
-                        t.stop();
-                        _pc.localVideoStream.removeTrack(t);
-                    }
-                    if (_pc.removeStream) _pc.removeStream(s);
-                }
-            }
-            if (_pc.senders){
-                for(var i=0,len=_pc.senders.length;i<len;++i) _pc.removeTrack(_pc.senders[i]);
-                _pc.senders = [];
+        var streams = _pc.getLocalStreams();
+        for (var i=0,len=streams.length;i<len;++i){
+            var s = streams[i];
+            if (s && s.id != _pc.localShareId) {
+                var tracks = s.getTracks();
+                for(var j=0,len2=tracks.length;j<len2;++j) tracks[j].stop();
+                if (_pc.removeStream) try{
+                    _pc.removeStream(streams[i]);
+                } catch(e){}
             }
         }
+        if (_pc.senders) try{
+            for(var i=0,len=_pc.senders.length;i<len;++i) _pc.removeTrack(_pc.senders[i]);
+            _pc.senders = null;
+        } catch(e){}
     }
     function _mute(audio, video) {
         if (!_pc) return;
@@ -344,6 +356,7 @@ var WebRTC = function(config, trace) {
             var tracks=stream.getTracks(),len=tracks.length;
             for (var i=0;i<len;++i) _pc.senders.push(_pc.addTrack(tracks[i],stream));
         }
+        if (!_answer && !_pc.dc) onDataChannel(_pc.createDataChannel("data channel"));
         var audioTracks = stream.getAudioTracks();
         if (audioTracks.length > 0){
             if (_pc.getSenders)
@@ -352,20 +365,18 @@ var WebRTC = function(config, trace) {
                 _pc.dtmf = _pc.createDTMFSender(audioTracks[0]);
             if (_pc.dtmf) {
                 _pc.dtmf.ontonechange = function(e) { trace("dtmf: " + e.tone); }
-                _rtc.dtmf = function(tones,duration,interToneGap) {
-                    if (!_pc || !_pc.dtmf) return;
+                _rtc.dtmf = function(tones,duration,interToneGap) { if (!_pc || !_pc.dtmf) return;
                     _pc.dtmf.insertDTMF(tones, duration, interToneGap);
                 }
             }
         }
-        var videoTracks = stream.getVideoTracks(),len=videoTracks.length;
-        if (len > 0) {
-            for (var i=0;i<len;++i) _pc.localVideoStream.addTrack(videoTracks[i]);
-            _rtc.onaddstream(_pc.localVideoStream, 'localvideo');
-        }
+        var videoTracks = stream.getVideoTracks();
+        _pc.localStream = stream;
+        if (_rtc.onaddstream && videoTracks.length > 0) _rtc.onaddstream(_pc.localStream, 'localvideo');
         _pc.onnegotiationneeded();
     }
     function _update(constraints) {
+        if (!_pc) return;
         if (typeof constraints == 'object') {
             if (typeof constraints.getTracks == 'function'
                 && typeof constraints.getAudioTracks == 'function'
@@ -382,7 +393,7 @@ var WebRTC = function(config, trace) {
         }
         trace("media closed");
         _resetLocalStream();
-        if (_pc) _pc.onnegotiationneeded();
+        _pc.onnegotiationneeded();
     }
     function call(config, constraints, peer) {
         if (typeof _rtc.onaddstream != 'function') throw new Error("invalid onaddstream");
@@ -396,7 +407,7 @@ var WebRTC = function(config, trace) {
         _pc.localShareId="";
         _pc.remoteStreamTypes={};
         _pc.onicecandidate = function(e) { if (!e|| !e.candidate || !_pc) return;
-            sendSingalingMessage({'ice':e.candidate,'type':'ice', 'shareid':_pc.localShareId}, peer);
+            sendSingalingMessage({'ice':e.candidate,'type':'ice'}, peer);
         }
         _pc.onaddstream = function (e) { if (!_pc) return;
             var type = _pc.remoteStreamTypes[e.stream.id];
@@ -409,23 +420,21 @@ var WebRTC = function(config, trace) {
                     type = 'peerdata';
                 _pc.remoteStreamTypes[e.stream.id] = type;
             }
-            _rtc.onaddstream(e.stream, type);
+            if (_rtc.onaddstream) _rtc.onaddstream(e.stream, type);
         };
         _pc.onremovestream = function(e) { if (!_pc) return;
             var type = _pc.remoteStreamTypes[e.stream.id];
             if (!type) return;
             delete _pc.remoteStreamTypes[e.stream.id];
-            _rtc.onremovestream(e.stream,type);
+            if (_rtc.onremovestream) _rtc.onremovestream(e.stream.id, type);
         }
         _pc.oniceconnectionstatechange = function(e) {
             var state = e.currentTarget.iceConnectionState;
-            trace("ICE:" + state);
-            if (_rtc.oniceconnectionstatechange) _rtc.oniceconnectionstatechange(state);
+            _rtc.oniceconnectionstatechange(state);
         }
         _pc.onsignalingstatechange = function(e) {
             var state = e.currentTarget.signalingState;
-            trace("signaling:" + state);
-            if (_rtc.onsignalingstatechange) _rtc.onsignalingstatechange(state);
+            _rtc.onsignalingstatechange(state);
         }
         _pc.ondatachannel = function(e) { onDataChannel(e.channel); }
         _pc.onnegotiationneeded = function() {
@@ -440,6 +449,8 @@ var WebRTC = function(config, trace) {
     _rtc.close = disconnect;
     _rtc.hangup = hangup;
     _rtc.onopen = trace;
+    _rtc.oniceconnectionstatechange = trace;
+    _rtc.onsignalingstatechange = trace;
     _rtc.onclose = disconnect;
     _rtc.oncall = call;
     _rtc.onhangup = hangup;
@@ -451,20 +462,21 @@ var WebRTC = function(config, trace) {
         if (!share){
             if (_shareStream && _pc.localShareId == _shareStream.id) {
                 _pc.removeStream(_shareStream);
-                _rtc.onremovestream(_shareStream, 'localshare');
+                if (_rtc.onremovestream) _rtc.onremovestream(_pc.localShareId, 'localshare');
                 _pc.localShareId = "";
             }
         }
         else if (_shareStream && _pc.localShareId != _shareStream.id) {
-            _pc.localShareId = _shareStream.id;
             _pc.addStream(_shareStream);
-            _rtc.onaddstream(_shareStream, 'localshare');
+            _pc.localShareId = _shareStream.id;
+            if (_rtc.onaddstream) _rtc.onaddstream(_shareStream, 'localshare');
         }
         else {
             getScreenId(mediaSource, function (error, sourceId, screen_constraints) {
                 if (!_pc) return;
                 if (error) {
-                    if (_rtc.onremovestream) _rtc.onremovestream(_shareStream, 'localshare');
+                    if (_rtc.onremovestream) _rtc.onremovestream(_pc.localShareId, 'localshare');
+                    _pc.localShareId = "";
                     return trace(error);
                 }
                 if (_shareStream) return;
@@ -474,13 +486,13 @@ var WebRTC = function(config, trace) {
                         _shareStream = null;
                         if (_pc && _pc.localShareId == stream.id) {
                             _pc.removeStream(stream);
-                            if (_rtc.onremovestream) _rtc.onremovestream(stream, 'localshare');
+                            if (_rtc.onremovestream) _rtc.onremovestream(_pc.localShareId, 'localshare');
                             _pc.localShareId = "";
                         }
                     }
                     if (_pc) {
-                        _pc.localShareId = stream.id;
                         _pc.addStream(stream);
+                        _pc.localShareId = _shareStream.id;
                         if (_rtc.onaddstream) _rtc.onaddstream(_shareStream, 'localshare');
                     }
                 }).catch(onerror);
