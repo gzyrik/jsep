@@ -1,4 +1,3 @@
-#include "stdafx.h"
 #include "file_player_scheduler.h"
 #include <thread>
 namespace FilePlayer

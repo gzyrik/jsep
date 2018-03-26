@@ -1,6 +1,5 @@
-#include "stdafx.h"
 #include "file_player_decoder.h"
-
+#include <third_party/libyuv/include/libyuv.h> 
 namespace FilePlayer
 {
 
@@ -83,11 +82,11 @@ Decoder::~Decoder()
 {
     Close();
 
-    if (_videoConverter)
-        sws_freeContext(_videoConverter);
+    //if (_videoConverter)
+    //    sws_freeContext(_videoConverter);
 
-    if (_audioConverter)
-        swr_free(&_audioConverter);
+    //if (_audioConverter)
+    //    swr_free(&_audioConverter);
 }
 
 bool Decoder::Open(const char* filePath)
@@ -99,44 +98,19 @@ bool Decoder::Open(const char* filePath)
         UTIL_LOGFMT_ERR("Decoder", "Already Opened.");
         return false;
     }
-
-    try
-    {
-        _formatCtx = avformat_alloc_context();
-        if (!_formatCtx)
-            ;// throw Common::Exception("AllocFormatContext");
-
-        if (avformat_open_input(&_formatCtx, filePath, NULL, NULL) != 0)
-            ;// throw Common::Exception("OpenInput");
-
-        if (avformat_find_stream_info(_formatCtx, NULL) < 0)
-        {
-            avformat_close_input(&_formatCtx);
-            ;// throw Common::Exception("ReadInfo");
-        }
-
-        if (InitDecoder(AVMEDIA_TYPE_VIDEO))
-            InitVideoInfo();
-
-        if (InitDecoder(AVMEDIA_TYPE_AUDIO))
-            InitAudioInfo();
-
-        startRun();
-    }
-    catch (std::exception ex)
-    {
-        if (_formatCtx)
-        {
-            avformat_free_context(_formatCtx);
-            _formatCtx = NULL;
-        }
-
-        UTIL_LOGFMT_ERR("Decoder", "Open:<%s> Failed:%s",
-                        filePath, ex._reason.c_str());
+    if (avformat_open_input(&_formatCtx, filePath, NULL, NULL) != 0)
+        return false;
+    if (avformat_find_stream_info(_formatCtx, NULL) < 0) {
+        avformat_close_input(&_formatCtx);
         return false;
     }
+    if (InitDecoder(AVMEDIA_TYPE_VIDEO))
+        InitVideoInfo();
 
-    UTIL_LOGFMT_IFO("Decoder", "Open:<%s>", filePath);
+    if (InitDecoder(AVMEDIA_TYPE_AUDIO))
+        InitAudioInfo();
+
+    startRun();
     return true;
 }
 
@@ -241,7 +215,7 @@ bool Decoder::SetAudioConfig(int samplingHz, int channels, int bytesPerChannel)
 
     if (_audioConverter)
     {
-        swr_free(&_audioConverter);
+        //swr_free(&_audioConverter);
         _audioConverter = NULL;
     }
 
@@ -394,8 +368,8 @@ void Decoder::InitAudioInfo()
     if (_streamIdxs[AVMEDIA_TYPE_AUDIO] == -1)
         return;
     
-    AVStream *pStream = _formatCtx->streams[_streamIdxs[AVMEDIA_TYPE_VIDEO]];
-    AVCodecContext *pCodecCtx = pStream->codec;
+    //AVStream *pStream = _formatCtx->streams[_streamIdxs[AVMEDIA_TYPE_VIDEO]];
+    //AVCodecContext *pCodecCtx = pStream->codec;
 
     _info.Audio.Valid = true;
     _info.Audio.SamplingHz = 48000;
@@ -407,7 +381,7 @@ int Decoder::DecodeVideoFrame(AVFrame* frame, AVPacket* packet)
 {
     if (_streamIdxs[AVMEDIA_TYPE_VIDEO] == -1)
         return packet->size;
-    
+
     AVStream *stream = _formatCtx->streams[_streamIdxs[AVMEDIA_TYPE_VIDEO]];
     AVCodecContext *codecCtx = stream->codec;
     int gotFrame;
@@ -422,17 +396,28 @@ int Decoder::DecodeVideoFrame(AVFrame* frame, AVPacket* packet)
     if (!gotFrame)
         return ret;
 
-    _videoConverter = sws_getCachedContext(_videoConverter,
-        codecCtx->width, codecCtx->height, codecCtx->pix_fmt,
-        _info.Video.Width, _info.Video.Height, AV_PIX_FMT_YUV420P, SWS_BICUBIC, NULL, NULL, NULL);
+    //_videoConverter = sws_getCachedContext(_videoConverter,
+    //    codecCtx->width, codecCtx->height, codecCtx->pix_fmt,
+    //    _info.Video.Width, _info.Video.Height, AV_PIX_FMT_YUV420P, SWS_BICUBIC, NULL, NULL, NULL);
 
     frame->pts = av_frame_get_best_effort_timestamp(frame);
     int64_t ts = frame->pts * 1000 * stream->time_base.num / stream->time_base.den;
     int64_t len = 1000 / (int64_t)_info.Video.FrameRateFps;
     VideoFramePtr videoFrame = std::make_shared<VideoFrame>(ts, len, _info.Video.Width, _info.Video.Height);
 
-    if (sws_scale(_videoConverter, frame->data, frame->linesize, 0, codecCtx->height,
-                  videoFrame->_frame->data, videoFrame->_frame->linesize) > 0)
+    //if (sws_scale(_videoConverter, frame->data, frame->linesize, 0, codecCtx->height,
+    //              videoFrame->_frame->data, videoFrame->_frame->linesize) > 0)
+    //    _videoFrames->Push(videoFrame);
+    if (0 == libyuv::I420Scale(
+            frame->data[0], frame->linesize[0],
+            frame->data[1], frame->linesize[1],
+            frame->data[2], frame->linesize[2],
+            codecCtx->width, codecCtx->height,
+            videoFrame->_frame->data[0], videoFrame->_frame->linesize[0],
+            videoFrame->_frame->data[1], videoFrame->_frame->linesize[1],
+            videoFrame->_frame->data[2], videoFrame->_frame->linesize[2],
+            _info.Video.Width, _info.Video.Height,
+            libyuv::kFilterBox))
         _videoFrames->Push(videoFrame);
 
     if (codecCtx->refcounted_frames)
@@ -469,12 +454,14 @@ int Decoder::DecodeAudioFrame(AVFrame* frame, AVPacket* packet)
     frame->pts = av_frame_get_best_effort_timestamp(frame);
     int64_t ts = frame->pts * 1000 * stream->time_base.num / stream->time_base.den;
     int64_t len = frame->nb_samples * 1000 / frame->sample_rate;
-    int samples = (int)(frame->nb_samples * (sampleRate / frame->sample_rate + ((sampleRate % frame->sample_rate) ? 1 : 0)));
+    size_t samples = (int)(frame->nb_samples * (sampleRate / frame->sample_rate + ((sampleRate % frame->sample_rate) ? 1 : 0)));
     AudioFramePtr audioFrame = std::make_shared<AudioFrame>(ts, len, samples, channelLayout, sampleRate, sampleFormat);
 
-    samples = swr_convert(_audioConverter, audioFrame->_frame->data, samples,
-                         (const uint8_t **)frame->data, frame->nb_samples);
-    if (samples > 0)
+    //samples = swr_convert(_audioConverter, audioFrame->_frame->data, samples,
+    //                     (const uint8_t **)frame->data, frame->nb_samples);
+    if (0 == resampler_.Push((const int16_t *)frame->data, frame->nb_samples,
+            (int16_t*)audioFrame->_frame->data, samples, samples))
+    //if (samples > 0)
     {
         audioFrame->_samples = samples;
         audioFrame->_len = samples * audioFrame->_channels * audioFrame->_bytesPerChannel;
@@ -489,7 +476,7 @@ int Decoder::DecodeAudioFrame(AVFrame* frame, AVPacket* packet)
 
 struct SwrContext * Decoder::GetSwrContext(struct SwrContext *context, AVFrame *frame,
     uint64_t& channelLayout, uint64_t& sampleRate, enum AVSampleFormat& sampleFormat)
-{
+{/*
     uint64_t sourceChannelLayout, sourceSampleRate;
     enum AVSampleFormat sourceSampleFormat;
 
@@ -513,14 +500,16 @@ struct SwrContext * Decoder::GetSwrContext(struct SwrContext *context, AVFrame *
         sourceSampleRate = frame->sample_rate;
         sourceSampleFormat = (enum AVSampleFormat)frame->format;
     }
-
+*/
     sampleRate = _info.Audio.SamplingHz;
     sampleFormat = AV_SAMPLE_FMT_S16;
     if (_info.Audio.ChannelsPerSample == 1)
         channelLayout = AV_CH_LAYOUT_MONO;
     else
         channelLayout = AV_CH_LAYOUT_STEREO;
+    resampler_.ResetIfNeeded(frame->sample_rate, _info.Audio.SamplingHz, _info.Audio.ChannelsPerSample);
 
+/*
     if (context)
         return context;
     
@@ -545,7 +534,7 @@ struct SwrContext * Decoder::GetSwrContext(struct SwrContext *context, AVFrame *
         swr_free(&context);
         return NULL;
     }
-
+*/
     return context;
 }
 

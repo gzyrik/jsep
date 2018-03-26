@@ -1,7 +1,6 @@
 #pragma once
 
 #include "file_player_decoder.h"
-#include "file_player_scheduler.h"
 
 namespace FilePlayer
 {
@@ -22,30 +21,26 @@ typedef std::shared_ptr<PlayerListener> PlayerListenerPtr;
 class Player : public RecMutex
 {
 public:
-    Player(int id);
+    Player();
     ~Player();
-
-    int Id();
 
     bool Open(const char* filePath, const PlayerListenerPtr& listener, bool audioPull);
     void Close();
 
-    const char * GetInfo(const char *name);
-    int GetInfo(const char *name, int dft);
+    const char * GetInfo(const char *name, int* val);
 
     int RequestAudioOutput(int samplingHz, int channels, void *buf, int len);
 
     void Start();
     void Stop();
-    void Pause();
-    void Resume();
+    bool Pause();
+    bool Resume();
     bool Seek(int mode, int ms);
 
     void AudioSchd(int64_t elapse);
     void VideoSchd(int64_t elapse);
 
 private:
-    int _id;
     bool _audioPull;
     bool _pause;
     int64_t _playTs;

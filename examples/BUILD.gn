@@ -517,6 +517,21 @@ if (is_ios) {
   }
 }
 
+rtc_static_library("zfp") {
+  testonly = true
+  sources = [
+    "zfp/file_player.cpp",
+    "zfp/file_player.h",
+    "zfp/file_player_decoder.cpp",
+    "zfp/file_player_decoder.h",
+    "zfp/file_player_queue.h",
+    "zfp/file_player_scheduler.h",
+    "zfp/zfp.cpp",
+  ]
+  configs += [ ":jsep_warnings_config" ]
+  deps = [ "//third_party/ffmpeg:ffmpeg" ]
+}
+
 rtc_shared_library("jsep") {
   testonly = true
   sources = [
@@ -569,6 +584,7 @@ rtc_shared_library("jsep") {
     "//webrtc/pc:libjingle_peerconnection",
     "//webrtc/system_wrappers:field_trial_default",
     "//webrtc/system_wrappers:metrics_default",
+    ":zfp"
   ]
 }
 

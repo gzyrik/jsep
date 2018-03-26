@@ -1,4 +1,4 @@
-#include "stdafx.h"
+
 #include "file_player_queue.h"
 
 namespace FilePlayer

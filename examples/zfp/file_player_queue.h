@@ -1,8 +1,20 @@
 #pragma once
-#include <cstdlib>
+#define UTIL_LOGFMT_ERR(...)
+#define UTIL_LOGFMT_IFO(...)
+#define UTIL_LOGFMT_DBG(...)
+extern "C"
+{
+#include <third_party/ffmpeg/libavcodec/avcodec.h>
+#include <third_party/ffmpeg/libavformat/avformat.h>
+#include <third_party/ffmpeg/libavutil/imgutils.h>
+#include <third_party/ffmpeg/libswscale/swscale.h>
+#include <third_party/ffmpeg/libswresample/swresample.h>
+#include <third_party/ffmpeg/libavutil/opt.h>
+};
 #include <queue>
 #include <memory>
 #include <mutex>
+namespace rtc { int64_t TimeMillis(); }
 namespace FilePlayer
 {
 class RecMutex
@@ -81,7 +93,58 @@ private:
     int64_t backTs_;
     std::queue<ItemPtr> queue_;
 };
+class Scheduler : public Thread
+{
+public:
+    class Listener
+    {
+    public:
+        virtual void OnSchd(int64_t elapse) = 0;
+    };
 
+    typedef std::shared_ptr<Listener> ListenerPtr;
+
+    Scheduler() : _lastTicks(0), _intervalTicks(0), _listener(0), pause_(false) {}
+    
+    void Start(int64_t interval, const ListenerPtr& listener) {
+        _lastTicks = 0;
+        _intervalTicks = interval;
+        _listener = listener;
+        pause_ = false;
+        startRun();
+    }
+    void Stop() {
+        stopRun();
+        _listener = 0;
+    }
+    void Pause(bool enable) { pause_ = enable; }
+    virtual void onRun() override {
+        while (isRunning()) {
+            int64_t now = rtc::TimeMillis();
+            if (now < _lastTicks + _intervalTicks)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                continue;
+            }
+
+            if (!pause_)
+                _listener->OnSchd(_lastTicks ? now - _lastTicks : 0);
+
+            if (_lastTicks)
+                _lastTicks += _intervalTicks;
+            else
+                _lastTicks = now;
+        }
+    }
+
+private:
+    int64_t _lastTicks;
+    int64_t _intervalTicks;
+    ListenerPtr _listener;
+    bool pause_;
+};
+
+typedef std::shared_ptr<Scheduler> SchedulerPtr;
 typedef std::shared_ptr<Queue> QueuePtr;
 
 } // namespace FilePlayer

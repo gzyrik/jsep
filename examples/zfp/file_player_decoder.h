@@ -1,7 +1,7 @@
 #pragma once
-
 #include "file_player_queue.h"
 #include <thread>
+#include "webrtc/common_audio/resampler/include/resampler.h"
 namespace FilePlayer
 {
 
@@ -112,6 +112,7 @@ private:
     QueuePtr _videoFrames;
     QueuePtr _audioFrames;
 
+    webrtc::Resampler resampler_;
     struct SwsContext *_videoConverter;
     struct SwrContext *_audioConverter;
 };

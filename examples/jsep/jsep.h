@@ -1298,7 +1298,36 @@ typedef struct JsonValue  JsonValue;
 
 /** @} */
 ////////////////////////////////////////////////////////////////////////////////
+/**
+ * @defgroup FilePlay 功能
+ * @{
+ */
+#define FilePlay_Open(filePath, userdata, pfnVideo, pfnAudio) \
+    JsepAPI(JSEP_API_LEVEL)->OpenFile(filePath, userdata, pfnVideo, pfnAudio)
+
+#define FilePlay_GetInfo(filePath, name, val) \
+    JsepAPI(JSEP_API_LEVEL)->GetFileInfo(filePath, name, val)
+
+#define FilePlay_Close(filePath) \
+    JsepAPI(JSEP_API_LEVEL)->CloseFile(filePath)
+
+#define FilePlay_ReadAudio(filePath, samplingHz, channcels, pcmBuf, len) \
+    JsepAPI(JSEP_API_LEVEL)->ReadFileAudio(filePath, samplingHz, channcels, pcmBuf, len)
+
+#define FilePlay_Pause(filePath) \
+    JsepAPI(JSEP_API_LEVEL)->PauseFilePlay(filePath)
+
+#define FilePlay_Resume(filePath) \
+    JsepAPI(JSEP_API_LEVEL)->ResumeFilePlay(filePath)
+
+#define FilePlay_Seek(filePath, offsetMs, origin) \
+    JsepAPI(JSEP_API_LEVEL)->SeekFile(filePath, offsetMs, origin)
+
+/** @} */
+////////////////////////////////////////////////////////////////////////////////
 typedef struct {
+    const char* (JSEP_CDECL_CALL *LastErrorDescription)();
+
     // media stream
     int (JSEP_CDECL_CALL *AddLocalStream) (RTCPeerConnection* iface, const char* streamId, RTCBoolean* bAudio, RTCBoolean *bVideo, MediaStreamConstraints constraints);
     void (JSEP_CDECL_CALL *RemoveLocalStream) (RTCPeerConnection* iface, const char* streamId);
@@ -1351,7 +1380,17 @@ typedef struct {
     int (JSEP_CDECL_CALL *CompareJson)(const JsonValue* jsonValue, const char* str, int n_str);
     int (JSEP_CDECL_CALL *UnescapeJson)(const JsonValue* jsonValue, char* buf);
 
-    const char* (JSEP_CDECL_CALL *LastErrorDescription)();
+    //file play
+    int (JSEP_CDECL_CALL *OpenFile)(const char *filePath, void *userdata,
+        void (*pfnVideo)(void *userdata, int playedMs, int width, int height, void *i420Buf),
+        void (*pfnAudio)(void *userdata, int playedMs, int samplingHz, int channels, void *pcmBuf, int len));
+    const char* (JSEP_CDECL_CALL *GetFileInfo)(const char *filePath, const char *name, int* value);
+    void (JSEP_CDECL_CALL *CloseFile)(const char *filePath);
+    int (JSEP_CDECL_CALL *SeekFile)(const char *filePath, int offsetMs, int origin);
+    int (JSEP_CDECL_CALL *ReadFileAudio)(const char *filePath, int samplingHz, int channcels, void *pcmBuf, int len);
+    int (JSEP_CDECL_CALL *PauseFilePlay)(const char *filePath);
+    int (JSEP_CDECL_CALL *ResumeFilePlay)(const char *filePath);
+
 } JSEP_API;
 
 #if defined(JSEP_IMPORT) || defined(_BUILD_JSEP_API_LEVEL__)
@@ -1420,8 +1459,9 @@ JSEP_INLINE const JSEP_API* JsepAPI(int apiLevel) {
 /**
  * JSON对象表述符.
  * @param[in] type 类型, 必须是JSON_OBJECT, JSON_ARRAY, JSON_STRING 之一
- * @param[in] start 在完整的JSON字符串的起始位置
- * @param[in] end 在完整的JSON字符串的结束位置
+ * @param[in] json JSON字符串
+ * @param[in] n_json 字符串长度
+ * @param[in] n_child 子对象个数
  */
 struct JsonValue {
     enum JsonForm type;

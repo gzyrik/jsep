@@ -1,7 +1,6 @@
-#include "stdafx.h"
 #include "file_player.h"
-#include "file_player_dll.h"
-
+#include <cctype>
+#include <algorithm>
 namespace FilePlayer
 {
 
@@ -39,9 +38,8 @@ private:
     Player* _player;
 };
 
-Player::Player(int id)
-    : _id(id)
-    , _audioPull(false)
+Player::Player()
+    : _audioPull(false)
     , _pause(false)
     , _playTs(-1)
     , _decoder(new Decoder())
@@ -60,11 +58,6 @@ Player::~Player()
     _audioScheduler = 0;
     _videoScheduler = 0;
     _audioRemain = 0;
-}
-
-int Player::Id()
-{
-    return _id;
 }
 
 bool Player::Open(const char* filePath, const PlayerListenerPtr& listener,
@@ -97,25 +90,28 @@ void Player::Close()
     _listener = 0;
 }
 
-const char * Player::GetInfo(const char *name)
+const char* Player::GetInfo(const char *name, int* val)
 {
-    return NULL;
-}
-
-int Player::GetInfo(const char *name, int dft)
-{
+    std::string key(name);
+    std::transform(key.begin(), key.end(), key.begin(), tolower);
     LockGuard _(*this);
 
-    if (strcmp(name, ZFP_INFO_LENGTH_MS) == 0)
+    if (key == "lengthms")
     {
-        return _mediaInfo.Video.Valid ? (int)_mediaInfo.Video.LengthMs : dft;
+        if (_mediaInfo.Video.Valid && val){
+            *val = (int)_mediaInfo.Video.LengthMs;
+            return "";
+        }
     }
-    else if (strcmp(name, ZFP_INFO_PLAYED_MS) == 0)
+    else if (key == "playedms")
     {
-        return (int)_playTs;
+        if (val) {
+            *val = (int)_playTs;
+            return "";
+        }
     }
 
-    return NULL;
+    return 0;
 }
 
 int Player::RequestAudioOutput(int samplingHz, int channels,
@@ -216,44 +212,50 @@ void Player::Stop()
     if (!_audioPull) _audioScheduler->Stop();
 }
 
-void Player::Pause()
+bool Player::Pause()
 {
     UTIL_LOGFMT_IFO("Player", "Pause", "");
 
     LockGuard _(*this);
-
-    _pause = true;
-    _videoScheduler->Pause(true);
-    if (!_audioPull) _audioScheduler->Pause(true);
+    if (_videoScheduler || _audioScheduler) {
+        _pause = true;
+        _videoScheduler->Pause(true);
+        if (!_audioPull) _audioScheduler->Pause(true);
+    }
+    return true;
 }
 
-void Player::Resume()
+bool Player::Resume()
 {
     UTIL_LOGFMT_IFO("Player", "Resume", "");
 
     LockGuard _(*this);
-
-    _pause = false;
-    _videoScheduler->Pause(false);
-    if (!_audioPull) _audioScheduler->Pause(false);
+    if (_videoScheduler || _audioScheduler){
+        _pause = false;
+        _videoScheduler->Pause(false);
+        if (!_audioPull) _audioScheduler->Pause(false);
+    }
+    else
+       Start();
+    return true;
 }
 
 bool Player::Seek(int mode, int ms)
 {
     UTIL_LOGFMT_IFO("Player", "Seek:%d Mode:%d", ms, mode);
 
-    int len = GetInfo(ZFP_INFO_LENGTH_MS, -1);
+    int len = (_mediaInfo.Video.Valid ? (int)_mediaInfo.Video.LengthMs : -1);
     if (len <= 0)
         return false;
 
     switch (mode)
     {
-    case ZFP_SEEK_BEGIN:
+    case SEEK_SET:
         break;
-    case ZFP_SEEK_CUR:
+    case SEEK_CUR:
         ms += (int)_playTs;
         break;
-    case ZFP_SEEK_END:
+    case SEEK_END:
         ms += len;
         break;
     default:
