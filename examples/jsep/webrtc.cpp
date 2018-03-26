@@ -124,7 +124,7 @@ void JsepClient::sendSignaling(const std::string& type, const std::string& key, 
         oss << "\"" << json << "\"";
     else
         oss << json;
-    if (type == "sdp") oss << ",\"shareid\":\"" << m_localShareId << "\"";
+    if (type == "sdp") oss << ",\"shareid\":\"" << m_localShareId << "\",\"mediaid\":\"" << m_localVideoId << "\"";
     oss << "}";
     RTCSocket_Send(m_ws, oss.str().c_str(), 0, 0);
     if (type == "sdp")

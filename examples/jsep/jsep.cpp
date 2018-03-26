@@ -4073,6 +4073,9 @@ JSEP_PUBLIC int luaopen_jsep (lua_State *L)
         {"RTCStatsFlag_Audio", RTCStatsFlag_Audio},
         {"RTCStatsFlag_Video", RTCStatsFlag_Video},
 
+        {"RTCSocketFlag_Binary", RTCSocketFlag_Binary},
+        {"RTCSocketFlag_Masking", RTCSocketFlag_Masking},
+
         {"RTCSessionEvent_RenegotiationNeeded", RTCSessionEvent_RenegotiationNeeded},
         {"RTCSessionEvent_CreateDescriptionSuccess", RTCSessionEvent_CreateDescriptionSuccess},
         {"RTCSessionEvent_CreateDescriptionFailure", RTCSessionEvent_CreateDescriptionFailure},
