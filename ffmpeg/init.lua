@@ -15,8 +15,8 @@ if not cpp_output then
     #include <libavformat/avformat.h>
     #include <libswscale/swscale.h>
     #include <libswresample/swresample.h>
+    #include <libavutil/avutil.h>
     #include <libavutil/opt.h>
-    #include <libavutil/imgutils.h>
     #include <libavfilter/avfilter.h>
     #include <libavfilter/buffersrc.h>
     #include <libavfilter/buffersink.h>
@@ -441,10 +441,11 @@ local function cache(v, e)
     if not v then v,f = pcall(sym, avcodec, e) end
     if not v then v,f = pcall(sym, avformat, e) end
     if not v then v,f = pcall(sym, avfilter, e) end
+--[[
     assert(v, f)
-    v = string.match(tostring(f), '<(.-)()>')--function return type
+    v = string.match(tostring(f), '<(.-)%b()>')--function return type
     if v then
-        if string.sub(v, -1) == 42 then
+        if string.byte(v, -1) == 42 then
             v = 1
         elseif v == 'int ' then
             v = 2
@@ -453,16 +454,18 @@ local function cache(v, e)
         end
     end
     if v then
+        local func = f
         f = function (...)
-            local r = f(...)
+            local r = func(...)
             if v==1 then
-                assert(r, e)
+                assert(r~=nil, e..' return nil')
             elseif v==2 and r < 0 then
                 panic(e, r)
             end
             return r
         end
     end
+ ]]
     rawset(M, e, f)
     return f
 end
