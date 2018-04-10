@@ -1,14 +1,12 @@
-local ffmpeg_dir = ...
-local ffmpeg_bin = ffmpeg_dir .. '/bin'
-local ffmpeg_def = ffmpeg_dir .. '/def.h'
 local ffi = require'ffi'
 local bit = require'bit'
--- Write includes to a temporary file
-local cpp_output = io.open(ffmpeg_def, 'r')
-local def
-if not cpp_output then
+local ffmpeg_dir = ...
+local ffmpeg_bin = ffmpeg_dir .. '/bin'
+local ffmpeg_def = ffmpeg_dir .. '/def.lua'
+if ffi.cset(ffmpeg_def) then
     local ffmpeg_inc = ffmpeg_dir .. '/include'
     local includes_path = os.tmpname()
+    -- Write includes to a temporary file
     local includes_file = io.open(includes_path, 'w+')
     includes_file:write[[
     #include <libavcodec/avcodec.h>
@@ -24,31 +22,18 @@ if not cpp_output then
     includes_file:close()
 
     -- Preprocess header files to get C declarations
-    cpp_output = io.popen('cpp '..ffmpeg_inc..' '..includes_path)
-    def = cpp_output:read('*all')
+    local cpp_output = io.popen('cpp '..ffmpeg_inc..' '..includes_path)
+    local def = cpp_output:read('*all')
     cpp_output:close()
-    cpp_output = io.open(ffmpeg_def, 'w+')
-    cpp_output:write(def)
-    cpp_output:close()
-else
-    def = cpp_output:read('*all')
-    cpp_output:close()
+    ffi.cdef(def)
+    ffi.cdef[[
+    int _chdir(const char *path);
+    char *_getcwd(char *buffer,  int maxlen);
+    char *strerror(int err);
+    ]]
+    ffi.cdump(ffmpeg_def)
 end
---os.remove(includes_path)
--- Parse C declarations with FFI
---def=string.gsub(def, '#[^\n]*\n', '')
---def=string.gsub(def, '%s+\n', '\n')
---def=string.gsub(def, '__pragma%b()', '')
---includes_file = io.open(includes_path, 'w+')
---includes_file:write(def)
---includes_file:close()
-ffi.cdef(def)
---os.exit(0)
-ffi.cdef[[
-int _chdir(const char *path);
-char *_getcwd(char *buffer,  int maxlen);
-char *strerror(int err);
-]]
+
 local function load_lib(t)
   local err = ''
   for _, name in ipairs(t) do
@@ -101,6 +86,14 @@ local M={
 
     AV_PKT_FLAG_KEY   =  0x0001,
     AV_PKT_FLAG_CORRUPT = 0x0002, 
+   
+    AV_DICT_MATCH_CAS为 = 1,
+    AV_DICT_IGNORE_SUFFIX = 2,
+    AV_DICT_DONT_STRDUP_KEY = 4,
+    AV_DICT_DONT_STRDUP_VAL = 8,
+    AV_DICT_DONT_OVERWRITE = 16,
+    AV_DICT_APPEND = 32,
+    AV_DICT_MULTIKEY = 64
 }
 local Video = {}
 local VideoFrame = {}
@@ -430,11 +423,16 @@ end
 M.Video = Video
 M.VideoFrame = VideoFrame
 local function sym(lib, func) return lib[func] end
-local function panic(prefix, err)
-    local errbuf = ffi.new('char[?]', 128)
-    if avutil.av_strerror(err, errbuf, 128) < 0 then errbuf = ffi.C.strerror(err) end
+M.assert = function (err, prefix)
+    if type(err) ~= 'number' then
+        if err == nil then error(prefix, 2) end
+        return
+    end
+    if err >= 0 then return end
+    local errbuf = ffi.new('char[?]', 1024)
+    if avutil.av_strerror(err, errbuf, 1024) < 0 then errbuf = ffi.C.strerror(err) end
     avutil.av_log(nil, M.AV_LOG_ERROR, "%s: %s\n", prefix, errbuf)
-    os.exit(-1)
+    error(ffi.string(errbuf), 2)
 end
 local function cache(v, e)
     local v,f= pcall(sym, avutil, e)
