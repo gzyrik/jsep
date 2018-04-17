@@ -11,10 +11,12 @@ if ffi.cset(ffmpeg_def) then
     includes_file:write[[
     #include <libavcodec/avcodec.h>
     #include <libavformat/avformat.h>
+    #include <libavdevice/avdevice.h>
     #include <libswscale/swscale.h>
     #include <libswresample/swresample.h>
     #include <libavutil/avutil.h>
     #include <libavutil/opt.h>
+    #include <libavutil/imgutils.h>
     #include <libavfilter/avfilter.h>
     #include <libavfilter/buffersrc.h>
     #include <libavfilter/buffersink.h>
@@ -50,7 +52,9 @@ ffi.C._chdir(ffmpeg_bin)
 local avutil = load_lib{'avutil-55'}
 local avcodec = load_lib{'avcodec-57'}
 local avformat = load_lib{'avformat-57'}
+local avdevice = load_lib{'avdevice-57'}
 local avfilter = load_lib{'avfilter-6'}
+local swscale = load_lib{'swscale-4'}
 ffi.C._chdir(path)
 --------------------------------------------------------------------------------
 local M={
@@ -93,17 +97,21 @@ local M={
     AV_DICT_DONT_STRDUP_VAL = 8,
     AV_DICT_DONT_OVERWRITE = 16,
     AV_DICT_APPEND = 32,
-    AV_DICT_MULTIKEY = 64
+    AV_DICT_MULTIKEY = 64,
+
+    SWS_FAST_BILINEAR = 1,
+    SWS_BILINEAR = 2,
+    SWS_BICUBIC = 4,
 }
 local Video = {}
 local VideoFrame = {}
 local AV_OPT_SEARCH_CHILDREN = 1
 
---avutil.av_log_set_level(M.AV_LOG_ERROR)
+avutil.av_log_set_level(M.AV_LOG_ERROR)
 avutil.av_log_set_flags(M.AV_LOG_SKIP_REPEATED)
 
-avcodec.avcodec_register_all();
-if avdevice then avdevice.avdevice_register_all() end
+avcodec.avcodec_register_all()
+avdevice.avdevice_register_all()
 avfilter.avfilter_register_all()
 avformat.av_register_all()
 avformat.avformat_network_init();
@@ -439,6 +447,7 @@ local function cache(v, e)
     if not v then v,f = pcall(sym, avcodec, e) end
     if not v then v,f = pcall(sym, avformat, e) end
     if not v then v,f = pcall(sym, avfilter, e) end
+    if not v then v,f = pcall(sym, swscale, e) end
 --[[
     assert(v, f)
     v = string.match(tostring(f), '<(.-)%b()>')--function return type
