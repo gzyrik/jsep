@@ -11,11 +11,11 @@ local function open_render(i_stm, format_name)
     stream.time_base.den = 25
     local codecpar = stream.codecpar
 
-    codecpar.codec_type = i_stm.codecpar.codec_type;  
-    codecpar.codec_id = i_stm.codecpar.codec_id;  
-    codecpar.width = i_stm.codecpar.width;  
-    codecpar.height = i_stm.codecpar.height;
-    codecpar.format = FFmpeg.AV_PIX_FMT_YUV420P;
+    codecpar.codec_type = i_stm.codecpar.codec_type
+    codecpar.format = FFmpeg.AV_PIX_FMT_YUV420P
+    codecpar.codec_id = FFmpeg.AV_CODEC_ID_RAWVIDEO --i_stm.codecpar.codec_id;  
+    codecpar.width = 352                            --i_stm.codecpar.width;  
+    codecpar.height = 288                           --i_stm.codecpar.height;
 
     --创建编码的AVCodecContext
     local codec = FFmpeg.avcodec_find_encoder(codecpar.codec_id)
@@ -78,7 +78,7 @@ local function open_video(url, format, options)
     return fmt_ctx, stream, codec_cxt
 end
 ----------------------------------------------------------------------------------
-local i_ctx, i_stm, decoder= open_video(arg[1] or 'video=FaceTime HD Camera', 'dshow')
+local i_ctx, i_stm, decoder= open_video('video=FaceTime HD Camera', 'dshow')
 local o_ctx, o_stm, encoder= open_render(i_stm, 'sdl')
 ----------------------------------------------------------------------------------
 local i_par, o_par = i_stm.codecpar,o_stm.codecpar
@@ -89,7 +89,7 @@ FFmpeg.SWS_BICUBIC, nil, nil, nil)
 ----------------------------------------------------------------------------------
 local options = ffi.new('AVDictionary*[1]')
 FFmpeg.av_dict_set(options, 'window_title', 'dshow-sdl', 0);
-FFmpeg.av_dict_set(options, 'window_size', 'cif', 0);
+FFmpeg.av_dict_set(options, 'window_borderless', '0', 0);
 local ret = FFmpeg.avformat_write_header(o_ctx[0], options)
 ----------------------------------------------------------------------------------
 local frame = FFmpeg.av_frame_alloc();
@@ -100,67 +100,33 @@ frame2.width  = o_par.width;
 frame2.height = o_par.height;
 FFmpeg.av_frame_get_buffer(frame2, 32);
 
-for i=0,10 do
-    FFmpeg.av_read_frame(i_ctx[0], packet)
+while true do
+    ret = FFmpeg.av_read_frame(i_ctx[0], packet)
+    if ret < 0 then break end
     ret = FFmpeg.avcodec_send_packet(decoder, packet);
-    while ret >= 0 do
+    while ret == 0 do
         ret = FFmpeg.avcodec_receive_frame(decoder, frame);
-        FFmpeg.sws_scale(s_ctx, ffi.cast('const unsigned char *const *', frame.data), frame.linesize, 0, i_par.height, frame2.data, frame2.linesize)
-        ret = FFmpeg.avcodec_send_frame(encoder, frame2);
-        while ret >= 0 do
+        if ret == 0 then
+            FFmpeg.sws_scale(s_ctx, ffi.cast('const unsigned char *const*', frame.data), frame.linesize, 0, i_par.height, frame2.data, frame2.linesize)
+            ret = FFmpeg.avcodec_send_frame(encoder, frame2);
+        end
+        while ret == 0 do
             ret = FFmpeg.avcodec_receive_packet(encoder, packet);
-            ret = FFmpeg.av_write_frame(o_ctx[0], packet);
-            --FFmpeg.assert(ret, 'render')
+            if ret == 0 then 
+                ret = FFmpeg.av_write_frame(o_ctx[0], packet);
+                if ret ~= 0 then goto clean end
+            end
         end
         FFmpeg.av_frame_unref(frame);
     end
     FFmpeg.av_packet_unref(packet)
 end
 ----------------------------------------------------------------------------------
-print('clean')
-FFmpeg.av_frame_free(ffi.new('AVFrame*[1]', frame));
-FFmpeg.av_frame_free(ffi.new('AVFrame*[1]', frame2));
-FFmpeg.av_packet_free(ffi.new('AVPacket*[1]', packet));
+::clean::
+FFmpeg.av_frame_free(ffi.new('AVFrame*[1]', frame))
+FFmpeg.av_frame_free(ffi.new('AVFrame*[1]', frame2))
+FFmpeg.av_packet_free(ffi.new('AVPacket*[1]', packet))
+FFmpeg.avcodec_free_context(ffi.new('AVCodecContext*[1]', encoder))
+FFmpeg.avcodec_free_context(ffi.new('AVCodecContext*[1]', decoder))
 FFmpeg.avformat_close_input(i_ct);
 FFmpeg.avformat_close_input(o_ctx);
-----------------------------------------------------------------------------------
-
-
---[[
-//----------从摄像头中获取帧----------
-AVPacket packet;
-int gotPicture;
-
-AVFrame *pFrame = av_frame_alloc();  //注意av_frame_alloc并未实际分配空间
-
-while( av_read_frame(pFormatCtx, &packet) >= 0 )
-{
-    if( packet.stream_index == videoStreamIndex )
-    {
-        //返回的pFrame由decoder管理
-        avcodec_decode_video2(pCodecCtx, pFrame, &gotPicture, &packet); 
-
-        //Do something
-
-        if(gotPicture)
-        {
-            av_frame_unref(pFrame);
-        }
-    }
-
-    av_free_packet(&packet);
-}
-
-//----------清理----------
-if ( NULL != pCodecCtx )
-{
-    avcodec_close(pCodecCtx);
-    pCodecCtx = NULL;
-}
-
-if ( NULL != pFormatCtx )
-{
-    avformat_close_input(&pFormatCtx);
-    pFormatCtx = NULL;
-}
-]]
