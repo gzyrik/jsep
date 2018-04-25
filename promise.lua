@@ -2,29 +2,34 @@
 API 说明
 
 注意:
-- Promise实例的承若(状态改变)后,即为常量.
+- Promise实例承若(状态改变)后,即为常量.
   常量的 :next(...), :catch(...) 为同步方法
   常量的 :resolve(...), :reject(...)为无效调用
 
 创建实例:
   - p = Promise.new(name)
   - p = Promise.new(function(resolve, reject) ... end, name)
-完成承若:
-  - p:resolve(...)
-  - p:reject(...)
+  完成承若:
+  p:resolve(v)
+  p:reject(v)
 
 创建常量
   - p = Promise.resolve(value, name)
   - p = Promise.reject(reason, name)
 
 等待所有的'fulfilled', 或首个的'rejected'
-  - Promise.all(...)
-  - Promise.all{...}
+  - p=Promise.all(...)
+  - p=Promise.all{...,name=''}
+  p:next(function(v)...end), v 为数组,与原参数相匹配
+  p:catch(function(v)...end), v 为数组, v.index 为出错的项索引
 
 等待首个的'fulfilled', 或首个的'rejected'
-  - Promise.race(...)
-  - Promise.race{...}
-- 
+  - p=Promise.race(...)
+  - p=Promise.race{...,name=''}
+  p:next(function(v)...end), v 为数组,v.index 为有效的项索引
+  p:catch(function(v)...end), v 为数组, v.index 为出错的项索引
+
+更新所有Promise实例,返回活跃个数
   - Promise.update()
 --------------------------------------------------------------------------------]]
 local FULFILLED, REJECTED  = 'fulfilled', 'rejected'
@@ -53,7 +58,8 @@ local transition = function(promise, state, value)
     assert(state == FULFILLED or state == REJECTED)
     assert(not rawget(promise, 'state'))
     if #promise > 0 then
-        print('=', promise.name, state)
+        local name = rawget(promise, 'name')
+        if name then print('=', name, state) end
         table.insert(promise_queue, promise)
     end
     rawset(promise, 'state', state)
@@ -78,10 +84,11 @@ local promise_resolve = function(promise, x)
     elseif is_promise(x) then
         assert(promise ~= x, 'TypeError: cannot resolve a promise with itself')
         if not rawget(x, 'state') then
-            return x:next(
+            x:next(
             function(value) promise_resolve(promise, value) end,
-            function(reason) promise_reject(promise, reason) end
-            )
+            function(reason) promise_reject(promise, reason) end,
+            rawget(promise,'name'))
+            return promise
         else
             return promise_resolve(promise, rawget(x, 'value'))
         end
@@ -105,15 +112,14 @@ end
 local function promise_run (promise)
     if #promise == 0 then return end
     local value = rawget(promise, 'value')
-    local fulfilled = rawget(promise, 'state')
-    assert(fulfilled == FULFILLED or fulfilled == REJECTED)
-    fulfilled = (fulfilled == FULFILLED)
+    local fulfilled = rawget(promise, 'state') == FULFILLED
     for f, obj in ipairs(promise) do
         promise[f] = nil
         if not rawget(obj[1], 'state') then
             f = fulfilled and obj[2] or obj[3]
             obj = obj[1]
-            print('>', promise.name, obj.name)
+            local name = rawget(obj, 'name')
+            if name then print('>', fulfilled and 'done()' or 'fail()', name) end
             local success, result = pcall(f, value, obj)
 
             if not success then
@@ -139,7 +145,8 @@ function promise_proto:next(on_fulfilled, on_rejected, name)
         on_fulfilled = is_callable(on_fulfilled) and on_fulfilled or passthrough
         on_rejected = is_callable(on_rejected) and on_rejected or errorthrough
     end
-    if name then name = (rawget(self, 'name') or '') ..'/'..name end
+    local pname = rawget(self, 'name')
+    if name and pname then name = pname ..'/'..name end
     local promise = promise_new(name)
     if state then
         local success, result = pcall(
@@ -159,7 +166,7 @@ function promise_proto:catch(callback, name) return self:next(nil, callback, nam
 function promise_proto:resolve(value) return promise_resolve(self, value) end
 function promise_proto:reject(reason) return promise_reject(self, reason) end
 --------------------------------------------------------------------------------
-local function promise_foreach(name, race_state, ...)
+local function promise_foreach(race_state, ...)
     local results,chains = {}, {}
     local remaining = select('#', ...)
     local p_array
@@ -169,7 +176,7 @@ local function promise_foreach(name, race_state, ...)
     else
         p_array = {...}
     end
-    local promise = promise_new(name)
+    local promise = promise_new(p_array.name)
 
     local check_finished = function(i, value, s)
         if not results then return end
@@ -182,6 +189,7 @@ local function promise_foreach(name, race_state, ...)
                 for i, p in ipairs(chains) do
                     if not rawget(p, 'state') then rawset(p, 'state', s) end
                 end
+                results.index = i
             elseif not s then
                 s = FULFILLED
             end
@@ -195,7 +203,7 @@ local function promise_foreach(name, race_state, ...)
             table.insert(chains, p:next(
             function(value)  check_finished(i, value, race_state) end,
             function(reason) check_finished(i, reason, REJECTED) end,
-            name..i))
+            p_array.name))
         else
             check_finished(i, p, race_state)
         end
@@ -220,13 +228,14 @@ return {
     resolve = function(value, name) return promise_resolve(promise_new(name), value) end,
     reject  = function(value, name) return promise_reject (promise_new(name), value) end,
 
-    race= function(...) return promise_foreach('R', FULFILLED, ...) end,
-    all = function(...) return promise_foreach('A', nil, ...) end,
+    race= function(...) return promise_foreach(FULFILLED, ...) end,
+    all = function(...) return promise_foreach(nil, ...) end,
 
     update = function()
         for i, p in ipairs(promise_queue) do
             promise_queue[i] = nil
             promise_run(p)
         end
+        return #promise_queue
     end
 }

@@ -23,6 +23,18 @@ local test1 = {
         assert(r == '42', r)
     end,
     function()
+        local r
+        Promise.new(function(resolve, reject)
+            resolve(1)
+            reject(2)  --ignore
+            resolve(3) --ignore
+        end):next(
+        function(v) r = v end,
+        function(v) r = v end --skip
+        )
+        assert(r == 1, r)
+    end,
+    function()
         local r={}
         Promise.new(function(resolve, reject)
             table.insert(r, 1)
@@ -47,14 +59,43 @@ local test1 = {
         assert(r == '53', r)
     end,
     function(i)
+        local p1= Promise.new('X'..i)
+        Promise.resolve(p1, 'A'..i)
+        :next(function() assert(false) end, 'B')
+        :catch(function() print(i, 'ok') end, 'C')
+        p1:reject()
+        while Promise.update() > 0 do end
+        print(string.rep('-', 60))
+    end,
+    function(i)
+        local r
+        Promise.race(Promise.new(),Promise.new(), 3)
+        :catch(function() assert(false) end)
+        :next(function(v) r=v end)
+        assert(r.index==3 and r[3]==3)
+    end,
+    function(i)
+        local r
+        local p1= Promise.new('A'..i)
+        Promise.all(Promise.new(),Promise.new(), p1)
+        :next(function() assert(false) end)
+        :catch(function(v) r=v end)
+        p1:reject(3)
+        while Promise.update() > 0 do end
+        print(string.rep('-', 60))
+        assert(r.index==3 and r[3]==3)
+    end,
+    function(i)
         local r={}
         local p1= Promise.new('A'..i)
-        Promise.race{p1,Promise.new('N')}
-        :next(function() assert(false) end, 'B')
-        :catch(function() return 'o' end, 'C') -- return to continue
-        :next(function(v) error(v..'k', 0) end, 'D')
-        :catch(function(v) print(v) end, 'E')
+        Promise.race{p1,Promise.new(), name='R'..i}
+        :next(function() assert(false) end)
+        :catch(function() return 'o' end, 'C'..i) -- return to continue
+        :next(function(v) error(v..'k', 0) end)
+        :catch(function(v) print(i, v) end, 'E'..i)
         p1:reject()
+        while Promise.update() > 0 do end
+        print(string.rep('-', 60))
     end
 }
 
@@ -103,9 +144,3 @@ function const()
     )
 end
 for i, t in ipairs(test1) do t(i) end
-for i=1,10 do 
-    print(string.rep('-', 60))
-    Promise.update() 
-end
-
-
