@@ -60,6 +60,7 @@ ffi.C._chdir(path)
 local M={
     avutil = avutil,
     avcodec = avcodec,
+    avdevice = avdevice,
     avformat = avformat,
     avfilter = avfilter,
 
@@ -107,7 +108,7 @@ local Video = {}
 local VideoFrame = {}
 local AV_OPT_SEARCH_CHILDREN = 1
 
-avutil.av_log_set_level(M.AV_LOG_ERROR)
+--avutil.av_log_set_level(M.AV_LOG_ERROR)
 avutil.av_log_set_flags(M.AV_LOG_SKIP_REPEATED)
 
 avcodec.avcodec_register_all()
@@ -446,8 +447,10 @@ local function cache(v, e)
     local v,f= pcall(sym, avutil, e)
     if not v then v,f = pcall(sym, avcodec, e) end
     if not v then v,f = pcall(sym, avformat, e) end
+    if not v then v,f = pcall(sym, avdevice, e) end
     if not v then v,f = pcall(sym, avfilter, e) end
     if not v then v,f = pcall(sym, swscale, e) end
+    if not v then return v, f end
 --[[
     assert(v, f)
     v = string.match(tostring(f), '<(.-)%b()>')--function return type
