@@ -63,7 +63,7 @@ Print help / information / capabilities:
     --hide_banner       Suppress printing banner.
 ]]}
 local global_options={[[
-Global options (affect whole program instead of just one file:
+Global options affect whole program instead of just one file:
     -y                  overwrite output files
     -n                  never overwrite output files
 ]],[[
@@ -72,6 +72,11 @@ Advanced global options:
 local file_options={[[
 Per-file main options:
     -f fmt              force format
+    -t duration         record or transcode "duration" seconds of audio/video
+    -to time_stop       record or transcode stop time
+    -fs limit_size      set the limit file size in bytes
+    -ss time_off        set the start time offset
+    -sseof time_off     set the start time offset relative to EOF
 ]],[[
 Advanced per-file options:
     --map [-]input_file_id[:stream_specifier][,sync_file_id[:stream_specifier]
@@ -100,7 +105,7 @@ Usage:
 Getting help:
     --help=,-h          print basic options
     --help=,-h -opt     print detailed description of option. e.g. -h -y
-    --help=,-h category print all options of category. 
+    --help=,-h category print all options of category: 
                         log, global, file, video, audio, subtitle, demo, or all 
 ]]
 local options = {
@@ -115,7 +120,7 @@ local options = {
 local demo=[[
 -fdshow -i"video=FaceTime HD Camera" -fsdl -c:v rawvideo --pix_fmt=yuv420p
 -i centaur_1.mpg -f sdl -c:v rawvideo --pix_fmt=yuv420p
--i centaur_1.mpg -f sdl --vcodec=rawvideo --pix_fmt=yuv420p -s 640x480
+-i centaur_1.mpg -f sdl --vcodec=rawvideo --pix_fmt=yuv420p -s:v 640x480
 -i centaur_1.mpg -c:v libx264 out.mp4
 ]]
 local function help(v)
@@ -150,7 +155,7 @@ local function help(v)
 end
 local getopt = dofile('getopt.lua')
 local iformat, icodec = {}, {} --input format, input codec
-local opt = getopt(..., 'i:fc:s:m:h',{
+local opt = getopt(..., 'i,c,s,m',{
     help='h', map='m', codec='c',
     acodec='c:a', vcodec='c:v',
     i=function(r)

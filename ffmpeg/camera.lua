@@ -1,8 +1,12 @@
-local _OPT = loadfile('ff-opt.lua')(arg)
+local _OPT, ret = loadfile('ff-opt.lua')
+assert(_OPT, ret)
+_OPT = _OPT(arg)
 ----------------------------------------------------------------------------------
 local ffi = require'ffi'
 local bit = require'bit'
-local FFmpeg = loadfile('init.lua')[[Z:\develop\ffmpeg-3.4.2-win64]]
+local FFmpeg = loadfile('init.lua')
+assert(FFmpeg, ret)
+FFmpeg = FFmpeg[[Z:\develop\ffmpeg-3.4.2-win64]]
 ----------------------------------------------------------------------------------
 if _OPT.pix_fmt then
     local pix_fmt = FFmpeg.av_get_pix_fmt(_OPT.pix_fmt)
@@ -22,7 +26,7 @@ end
 if not _OPT.hide_banner then
     local indent = '  '
     local libs= 'avutil avcodec avformat avdevice avfilter swscale swresample postproc'
-    FFmpeg.av_log(nil, FFmpeg.AV_LOG_INFO, "Copyright (c) 2003-2018 the FFmpeg developers\n")
+    FFmpeg.av_log(nil, FFmpeg.AV_LOG_INFO, "%s Copyright (c) 2003-2018 the FFmpeg developers\n", jit and jit.version or _VERSION)
     local a = string.format("%sconfiguration: %s\n", indent, ffi.string(FFmpeg.avformat_configuration()));
     FFmpeg.av_log(nil, FFmpeg.AV_LOG_INFO, a);
     for b in string.gmatch(libs, "%a+") do
@@ -35,6 +39,7 @@ if not _OPT.hide_banner then
         end
     end
 end
+if #_OPT.i ==0 then os.exit(0) end
 ----------------------------------------------------------------------------------
 local function open_output(i_stm)
     local fmt_ctx = ffi.new('AVFormatContext*[1]')
@@ -146,6 +151,10 @@ end
 local ret = FFmpeg.avformat_write_header(o_ctx[0], nil)
 assert(ret)
 ----------------------------------------------------------------------------------
+local _TTY, ret = loadfile('ff-tty.lua')
+assert(_TTY, ret)
+_TTY = _TTY(FFmpeg, _OPT)
+----------------------------------------------------------------------------------
 local frame = FFmpeg.av_frame_alloc();
 local packet = FFmpeg.av_packet_alloc();
 local frame2 = FFmpeg.av_frame_alloc();
@@ -153,7 +162,10 @@ frame2.format = o_par.format;
 frame2.width  = o_par.width;
 frame2.height = o_par.height;
 FFmpeg.av_frame_get_buffer(frame2, 32);
-while true do
+while not _TTY.sigterm do
+    local cur_time= FFmpeg.av_gettime_relative()
+    if _TTY.check(cur_time) < 0 then break end
+
     ret = FFmpeg.av_read_frame(i_ctx[0], packet)
     if ret < 0 then break end
     ret = FFmpeg.avcodec_send_packet(decoder, packet);

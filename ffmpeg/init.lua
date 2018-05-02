@@ -16,6 +16,7 @@ if ffi.cset(ffmpeg_def) then
     #include <libswresample/swresample.h>
     #include <libavutil/avutil.h>
     #include <libavutil/opt.h>
+    #include <libavutil/time.h>
     #include <libavutil/imgutils.h>
     #include <libavfilter/avfilter.h>
     #include <libavfilter/buffersrc.h>
