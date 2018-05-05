@@ -76,6 +76,7 @@ local M={
     AV_LOG_TRACE   = 56,
 
     AV_LOG_SKIP_REPEATED = 1,
+    AV_LOG_PRINT_LEVEL = 2,
 
     AVFMT_NOFILE   =    0x0001,
 
@@ -104,10 +105,53 @@ local M={
     SWS_FAST_BILINEAR = 1,
     SWS_BILINEAR = 2,
     SWS_BICUBIC = 4,
+
+    AV_PIX_FMT_FLAG_BE = 0x1,
+    AV_PIX_FMT_FLAG_PAL = 0x2,
+    AV_PIX_FMT_FLAG_BITSTREAM = 0x4,
+    AV_PIX_FMT_FLAG_HWACCEL = 0x8,
+    AV_PIX_FMT_FLAG_PLANAR = 0x10,
+    AV_PIX_FMT_FLAG_RGB = 0x20,
+    AV_PIX_FMT_FLAG_PSEUDOPAL = 0x40,
+    AV_PIX_FMT_FLAG_ALPHA = 0x80,
+    AV_PIX_FMT_FLAG_BAYER = 0x100,
+
+    AV_CODEC_PROP_INTRA_ONLY = 0x1,
+    AV_CODEC_PROP_LOSSY = 0x2,
+    AV_CODEC_PROP_LOSSLESS = 0x4,
+    AV_CODEC_PROP_REORDER = 0x8,
+
+
+    AV_CODEC_CAP_DRAW_HORIZ_BAND = 0x1,
+    AV_CODEC_CAP_DR1 = 0x2,
+    AV_CODEC_CAP_TRUNCATED = 0x8,
+    AV_CODEC_CAP_DELAY = 0x20,
+    AV_CODEC_CAP_SMALL_LAST_FRAME = 0x40,
+    AV_CODEC_CAP_HWACCEL_VDPAU=0x80,
+    AV_CODEC_CAP_SUBFRAMES=0x100,
+    AV_CODEC_CAP_EXPERIMENTAL =0x200,
+    AV_CODEC_CAP_CHANNEL_CONF =0x400,
+    AV_CODEC_CAP_FRAME_THREADS=0x1000,
+    AV_CODEC_CAP_SLICE_THREADS=0x2000,
+    AV_CODEC_CAP_PARAM_CHANGE=0x4000,
+    AV_CODEC_CAP_AUTO_THREADS=0x8000,
+    AV_CODEC_CAP_VARIABLE_FRAME_SIZE=0x10000,
+    AV_CODEC_CAP_AVOID_PROBING=0x20000,
+
+    AV_OPT_FLAG_ENCODING_PARAM = 1,
+    AV_OPT_FLAG_DECODING_PARAM = 2,
+    AV_OPT_FLAG_METADATA       = 4,
+    AV_OPT_FLAG_AUDIO_PARAM    = 8,
+    AV_OPT_FLAG_VIDEO_PARAM    = 16,
+    AV_OPT_FLAG_SUBTITLE_PARAM = 32,
+
+    AV_OPT_SEARCH_CHILDREN = 1,
+    AV_OPT_SEARCH_FAKE_OBJ = 2,
+    AV_OPT_ALLOW_NULL = 4,
+    AV_OPT_MULTI_COMPONENT_RANGE = 0x1000,
 }
 local Video = {}
 local VideoFrame = {}
-local AV_OPT_SEARCH_CHILDREN = 1
 
 --avutil.av_log_set_level(M.AV_LOG_ERROR)
 avutil.av_log_set_flags(M.AV_LOG_SKIP_REPEATED)
@@ -314,7 +358,7 @@ function Video:filter(pixel_format_name, filterchain)
   local pix_fmts = ffi.new('enum AVPixelFormat[1]', {pix_fmt})
   if avutil.av_opt_set_bin(buffersink_context[0],
     'pix_fmts', ffi.cast('const unsigned char*', pix_fmts),
-    1 * ffi.sizeof('enum AVPixelFormat'), AV_OPT_SEARCH_CHILDREN) < 0
+    1 * ffi.sizeof('enum AVPixelFormat'), M.AV_OPT_SEARCH_CHILDREN) < 0
   then
     error('Failed to set output pixel format')
   end
@@ -453,10 +497,9 @@ local function cache(v, e)
     if not v then v,f = pcall(sym, swscale, e) end
     if not v then return v, f end
 --[[
-    assert(v, f)
     v = string.match(tostring(f), '<(.-)%b()>')--function return type
     if v then
-        if string.byte(v, -1) == 42 then
+        if string.byte(v, -1) == 42 then --'*'
             v = 1
         elseif v == 'int ' then
             v = 2
@@ -479,5 +522,27 @@ local function cache(v, e)
  ]]
     rawset(M, e, f)
     return f
+end
+local unpack = unpack or table.unpack
+local function _fornext(init, func, state, fiter, ...)
+    if type(func) == 'string' then func = M[func] end
+    local extra = {...}
+    return function(state, v)
+        ::C::
+        v = func(state or v, unpack(extra)) 
+        if v ~= nil then
+            if fiter and not fiter(v) then goto C end
+            return v
+        end
+        return nil
+    end, state, init
+end
+
+M.foreach = function (f, s, ...)
+    if type(s) == 'function' then
+        return _fornext(nil, f, nil, s, ...)
+    else
+        return _fornext(nil, f, s, nil, ...)
+    end
 end
 return setmetatable(M, {__index=cache})

@@ -11,17 +11,19 @@ local function _getopt(arg, options, repl, start)
     local i, argc = start, #arg
     local function setarg(k, x, y)
         if y then
+            if ret[k][y] == x then return end
             ret[k][y] = x
         elseif type(ret[k]) == 'table' then
-            if not x and #ret[k] > 0 then return end
             table.insert(ret[k], x or true)
         elseif x then
             if ret[k] == x then return end
             ret[k] = x
         elseif not ret[k] then 
             ret[k] = true
+        else
+            return
         end
-        if repl and type(repl[k]) == 'function' then repl[k](ret) end
+        if repl and type(repl[k]) == 'function' then repl[k](ret, i, x, y) end
     end
     local function langarg(v, idx)
         local x = string.find(v, '=', idx, true)
@@ -59,7 +61,6 @@ local function _getopt(arg, options, repl, start)
         else -- '-'
             langarg(v, 2)
         end
-        ::continue::
         i = i + 1
     end
     if repl then
@@ -92,45 +93,44 @@ local function getopt(arg, options, repl, start)
 end
 
 if select('#', ...) > 0 then
-    local r=getopt('-abc -a')
-    assert(r.abc == true and r.a and not r.c)
+    local r=getopt('-abc -a --bcd') -- '-' is equal to '--'
+    assert(r.abc == true and r.a == true and r.bcd == true and not r.c)
 
-    local r=getopt('-a -h')
-    assert(r.a == true and r.h==true)
+    local r=getopt('-abc a -abc') -- ignore not first null 
+    assert(r.abc == 'a')
 
-    local r=getopt('-h a -a')
-    assert(r.a == true and r.h=='a')
-
-    local r=getopt('-h type=a')
-    assert(r.h=='type=a')
-
-    local r=getopt('-h -a', 'h')
-    assert(r.h[1]== true and r.a == true)
-
-    local r=getopt('-h type=a -h', 'h')--ignore not first null
-    assert(r.h[1]=='type=a' and not r.h[2])
-
-    local r=getopt('-a -b -c', 2)
-    assert(not r.a and r.b == true and r.c == true)
-
-    local r=getopt('-s:v wxh', 's')
-    assert(r.s.v=='wxh')
-
-    r=getopt('--codec=aac --pix_fmt= yuv420p')
+    local r=getopt('--abc a -bcd=a -h= all') -- two '=' formats
+    assert(r.bcd=='a' and r.h == 'all' and r.abc == 'a')
+    local r=getopt('--codec=aac --pix_fmt= yuv420p')
     assert(r.codec== 'aac' and r.pix_fmt=='yuv420p')
 
-    r=getopt('-c:v rawvideo --pix_fmt=yuv420p', 'c:')
-    --r={c={v='rawvideo'},pix_fmt='yuv420p'}
-    assert(r.c.v== 'rawvideo' and r.pix_fmt== 'yuv420p')
+    local r=getopt('-h type=a') -- not '=' format
+    assert(r.h=='type=a')
 
-    r=getopt('-c -daone -b one -f:x 1 -f:y 2 -f 3 -f 0:1 --fz=4','f', {fz='f:z'})
-    --r={c=true,d=true,a='one',b='one',f={1='3',2='0:1',x='1',y='2',z='4'}}
+    local r=getopt('-h -a -h b', 'h') -- array-format, the first null is valid
+    assert(r.h[1]== true and r.h[2] == 'b' and r.a == true)
+
+    local r=getopt('-h type=a -h', 'h')--array-format, the second null is valid
+    assert(r.h[1]=='type=a' and r.h[2] == true)
+
+    local r=getopt('-a -b -c', 2) -- start index
+    assert(not r.a and r.b == true and r.c == true)
+
+    local r=getopt('-s:v wxh -s:a', 's') -- map-format, null is ignore
+    assert(r.s.v=='wxh' and not r.s.a)
+
+    r=getopt('-c:v rawvideo --pix_fmt=yuv420p', 'c') -- map-format and '=' format
+    assert(r.c.v=='rawvideo' and r.pix_fmt=='yuv420p')
+
+    r=getopt('-c -daone -b one -f:x 1 -f:y 2 -f 3 -f 0:1 --fz=4','f', {fz='f:z'})-- map-format, nick-format
     assert(r.c==true and r.daone==true and not r.a and r.b=='one')
-    assert(r.f[1]=='3' and r.f[2]=='0:1' and r.f.x=='1' and r.f.y=='2' and r.f.z=='4')
+    assert(r.f[1]=='3' and r.f[2]=='0:1' and r.f.x=='1' and r.f.y=='2' and r.f.z=='4' and not r.fz)
 
     local f={}
-    r=getopt('-i a -f B -i b --input=c', 'i', {input='i',i=function(r) f[#r.i], r.f = r.f, nil end})
-    --r={i={a, b}}, f={nil, B}
+    r=getopt('-i a -f B -i b --input=c', 'i', {
+        input='i',
+        i=function(r) f[#r.i], r.f = r.f, nil end
+    }) -- collect per input options
     assert(r.input == r.i)
     assert(r.i[1]=='a' and r.i[2]=='b' and r.i[3]=='c' and not r.f)
     assert(not f[1] and f[2]=='B' and not f[3])

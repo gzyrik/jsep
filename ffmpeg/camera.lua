@@ -1,49 +1,19 @@
-local _OPT, ret = loadfile('ff-opt.lua')
-assert(_OPT, ret)
-_OPT = _OPT(arg)
-----------------------------------------------------------------------------------
-local ffi = require'ffi'
-local bit = require'bit'
-local FFmpeg = loadfile('init.lua')
+local ffi, bit = require'ffi', require'bit'
+local FFmpeg, ret = loadfile('init.lua')
 assert(FFmpeg, ret)
 FFmpeg = FFmpeg[[Z:\develop\ffmpeg-3.4.2-win64]]
 ----------------------------------------------------------------------------------
-if _OPT.pix_fmt then
-    local pix_fmt = FFmpeg.av_get_pix_fmt(_OPT.pix_fmt)
-    assert(pix_fmt ~= FFmpeg.AV_PIX_FMT_NONE, _OPT.pix_fmt)
-    _OPT.pix_fmt = pix_fmt
-end
-if _OPT.codec.v then
-    local codec = FFmpeg.avcodec_find_encoder_by_name(_OPT.codec.v)
-    assert(codec ~= nil, _OPT.codec.v)
-    _OPT.codec.v = codec.id
-end
-for i,f in ipairs(_OPT.iformat) do
-    local fmt = FFmpeg.av_find_input_format(f)
-    FFmpeg.assert(fmt, f)
-    _OPT.iformat[i] = fmt
-end
-if not _OPT.hide_banner then
-    local indent = '  '
-    local libs= 'avutil avcodec avformat avdevice avfilter swscale swresample postproc'
-    FFmpeg.av_log(nil, FFmpeg.AV_LOG_INFO, "%s Copyright (c) 2003-2018 the FFmpeg developers\n", jit and jit.version or _VERSION)
-    local a = string.format("%sconfiguration: %s\n", indent, ffi.string(FFmpeg.avformat_configuration()));
-    FFmpeg.av_log(nil, FFmpeg.AV_LOG_INFO, a);
-    for b in string.gmatch(libs, "%a+") do
-        a = FFmpeg[b..'_version']
-        if a then
-            a = a()
-            a = string.format("%slib%-11s %2d.%3d.%3d\n", indent, b,
-            bit.rshift(a,16), bit.rshift(bit.band(a,0x00FF00),8), bit.band(a,0xFF))
-            FFmpeg.av_log(nil, FFmpeg.AV_LOG_INFO, a)
-        end
-    end
-end
-if #_OPT.i ==0 then os.exit(0) end
+local _OPT, ret = loadfile('ff-opt.lua')
+assert(_OPT, ret)
+_OPT = _OPT(FFmpeg, arg)
 ----------------------------------------------------------------------------------
-local function open_output(i_stm)
+local _TTY, ret = loadfile('ff-tty.lua')
+assert(_TTY, ret)
+_TTY = _TTY(FFmpeg, _OPT)
+----------------------------------------------------------------------------------
+local function open_output(index, i_stm)
     local fmt_ctx = ffi.new('AVFormatContext*[1]')
-    local ret = FFmpeg.avformat_alloc_output_context2(fmt_ctx, nil, _OPT.f,  _OPT[1])
+    local ret = FFmpeg.avformat_alloc_output_context2(fmt_ctx, nil, _OPT.f,  _OPT[index])
     FFmpeg.assert(ret, 'avformat_alloc_output_context2')
     local stream = FFmpeg.avformat_new_stream(fmt_ctx[0], nil)
     stream.time_base.num = 1
@@ -55,9 +25,10 @@ local function open_output(i_stm)
     codecpar.codec_id = _OPT.codec.v or i_stm.codecpar.codec_id
     codecpar.width = i_stm.codecpar.width
     codecpar.height = i_stm.codecpar.height
-    if _OPT.s.v then
-        local w, h = string.match(_OPT.s.v, '^(%d*)x(%d*)$')
-        assert(w and h, _OPT.s.v)
+    local size = _OPT.s.v or _OPT.s[index]
+    if size then
+        local w, h = string.match(size, '^(%d*)x(%d*)$')
+        assert(w and h, size)
         codecpar.width, codecpar.height = tonumber(w), tonumber(h)
     end
     --´´½¨±àÂëµÄAVCodecContext
@@ -66,9 +37,10 @@ local function open_output(i_stm)
     local ret = FFmpeg.avcodec_parameters_to_context(codec_cxt, codecpar)
     codec_cxt.time_base = stream.time_base
     FFmpeg.assert(ret, 'avcodec_parameters_to_context')
-    local ret = FFmpeg.avcodec_open2(codec_cxt, codec, nil)
+    local dict = _OPT.codec_opts(codecpar.codec_id, fmt_ctx[0], stream, codec)
+    local ret = FFmpeg.avcodec_open2(codec_cxt, codec, dict)
     FFmpeg.assert(ret, 'avcodec_open2')
-    FFmpeg.av_dump_format(fmt_ctx[0], 0, _OPT[1], 1);
+    FFmpeg.av_dump_format(fmt_ctx[0], 0, _OPT[index], 1);
     return fmt_ctx, stream, codec_cxt
 end
 local function open_input(index, options)
@@ -110,7 +82,9 @@ local function open_input(index, options)
     local ret = FFmpeg.avcodec_parameters_to_context(codec_cxt, codecpar)
     FFmpeg.assert(ret, 'avcodec_parameters_to_context')
     --codec_cxt.pix_fmt = FFmpeg.AV_PIX_FMT_YUV420P
-    local ret = FFmpeg.avcodec_open2(codec_cxt, codec, nil)
+    --filter_codec_opts
+    local dict = _OPT.codec_opts(codecpar.codec_id, fmt_ctx[0], stream, codec)
+    local ret = FFmpeg.avcodec_open2(codec_cxt, codec, dict)
     FFmpeg.assert(ret, 'avcodec_open2')
 
     return fmt_ctx, stream, codec_cxt
@@ -118,7 +92,7 @@ end
 ----------------------------------------------------------------------------------
 local function process(arg)
     local i_ctx, i_stm, decoder= open_input(1)
-    local o_ctx, o_stm, encoder= open_output(i_stm)
+    local o_ctx, o_stm, encoder= open_output(1, i_stm)
 ----------------------------------------------------------------------------------
 local i_par, o_par = i_stm.codecpar,o_stm.codecpar
 local s_ctx = FFmpeg.sws_getCachedContext(nil,
@@ -150,10 +124,6 @@ end
 --FFmpeg.av_dict_set(options, 'window_borderless', '0', 0);
 local ret = FFmpeg.avformat_write_header(o_ctx[0], nil)
 assert(ret)
-----------------------------------------------------------------------------------
-local _TTY, ret = loadfile('ff-tty.lua')
-assert(_TTY, ret)
-_TTY = _TTY(FFmpeg, _OPT)
 ----------------------------------------------------------------------------------
 local frame = FFmpeg.av_frame_alloc();
 local packet = FFmpeg.av_packet_alloc();
