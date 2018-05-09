@@ -30,6 +30,8 @@ if ffi.cset(ffmpeg_def) then
     cpp_output:close()
     ffi.cdef(def)
     ffi.cdef[[
+    int strcmp(const char*, const char*);
+    const char* strstr(const char*, const char*);
     int _chdir(const char *path);
     char *_getcwd(char *buffer,  int maxlen);
     char *strerror(int err);
@@ -512,9 +514,12 @@ local function cache(v, e)
         f = function (...)
             local r = func(...)
             if v==1 then
-                assert(r~=nil, e..' return nil')
+                if r == nil then return nil end
             elseif v==2 and r < 0 then
-                panic(e, r)
+                local errbuf = ffi.new('char[?]', 1024)
+                if avutil.av_strerror(r, errbuf, 1024) >= 0 then
+                    avutil.av_log(nil, M.AV_LOG_ERROR, "%s: %s\n", e, errbuf)
+                end
             end
             return r
         end
@@ -523,26 +528,11 @@ local function cache(v, e)
     rawset(M, e, f)
     return f
 end
-local unpack = unpack or table.unpack
-local function _fornext(init, func, state, fiter, ...)
+M.foreach = function (func, init)
     if type(func) == 'string' then func = M[func] end
-    local extra = {...}
-    return function(state, v)
-        ::C::
-        v = func(state or v, unpack(extra)) 
-        if v ~= nil then
-            if fiter and not fiter(v) then goto C end
-            return v
-        end
-        return nil
-    end, state, init
-end
-
-M.foreach = function (f, s, ...)
-    if type(s) == 'function' then
-        return _fornext(nil, f, nil, s, ...)
-    else
-        return _fornext(nil, f, s, nil, ...)
-    end
+    return function(_, v)
+        v = func(v) 
+        return v ~= nil and v or nil
+    end, nil, init
 end
 return setmetatable(M, {__index=cache})

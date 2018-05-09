@@ -1,16 +1,12 @@
-local ffi, bit = require'ffi', require'bit'
-local FFmpeg, ret = loadfile('init.lua')
-assert(FFmpeg, ret)
-FFmpeg = FFmpeg[[Z:\develop\ffmpeg-3.4.2-win64]]
-----------------------------------------------------------------------------------
 local _OPT, ret = loadfile('ff-opt.lua')
 assert(_OPT, ret)
-_OPT = _OPT(FFmpeg, arg)
+local _OPT, FFmpeg = _OPT(arg)
 ----------------------------------------------------------------------------------
 local _TTY, ret = loadfile('ff-tty.lua')
 assert(_TTY, ret)
 _TTY = _TTY(FFmpeg, _OPT)
 ----------------------------------------------------------------------------------
+local ffi, bit = require'ffi', require'bit'
 local function open_output(index, i_stm)
     local fmt_ctx = ffi.new('AVFormatContext*[1]')
     local ret = FFmpeg.avformat_alloc_output_context2(fmt_ctx, nil, _OPT.f,  _OPT[index])
@@ -34,12 +30,14 @@ local function open_output(index, i_stm)
     --´´½¨±àÂëµÄAVCodecContext
     local codec = FFmpeg.avcodec_find_encoder(codecpar.codec_id)
     local codec_cxt = FFmpeg.avcodec_alloc_context3(codec);
-    local ret = FFmpeg.avcodec_parameters_to_context(codec_cxt, codecpar)
     codec_cxt.time_base = stream.time_base
+    local ret = FFmpeg.avcodec_parameters_to_context(codec_cxt, codecpar)
     FFmpeg.assert(ret, 'avcodec_parameters_to_context')
     local dict = _OPT.codec_opts(codecpar.codec_id, fmt_ctx[0], stream, codec)
     local ret = FFmpeg.avcodec_open2(codec_cxt, codec, dict)
     FFmpeg.assert(ret, 'avcodec_open2')
+    ret = FFmpeg.avcodec_parameters_from_context(codecpar, codec_cxt)
+    FFmpeg.assert(ret, 'avcodec_parameters_from_context')
     FFmpeg.av_dump_format(fmt_ctx[0], 0, _OPT[index], 1);
     return fmt_ctx, stream, codec_cxt
 end

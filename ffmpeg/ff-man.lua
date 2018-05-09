@@ -55,7 +55,7 @@ local description={
 
     Another example that enables repeated log output without affecting current
     state of level prefix flag or loglevel:
-        ffmpeg [...] -loglevel +repeat
+        ffmpeg [...] -loglevel repeat
 ]],
     f=[[
 -f fmt (input/output)
@@ -163,7 +163,16 @@ Advanced per-file options:
 ]]}
 local video_options={[[
 Video options:
+    -vframes number     set the number of video frames to output
+    -r rate             set frame rate (Hz value, fraction or abbreviation)
     -s size             set frame size (WxH or abbreviation)
+    -aspect aspect      set aspect ratio (4:3, 16:9 or 1.3333, 1.7777)
+    -bits_per_raw_sample number  set the number of bits per raw sample
+    -vn                 disable video
+    -vcodec codec       force video codec ('copy' to copy stream)
+    -s size             set frame size (WxH or abbreviation)
+    -ab bitrate         audio bitrate (please use -b:a)
+    -b bitrate          video bitrate (please use -b:v)
 ]],[[
 Advanced Video options:
     --pix_fmt format    set pixel format
@@ -182,10 +191,12 @@ Usage:
 [options] [[infile options] -i infile]... {[outfile options] outfiles} ...
 
 Getting help:
-    --help,-h          print basic options
-    --help,-h -opt     print detailed description of option. e.g. -h -y
-    --help,-h category print all options of category: 
-                       info, global, file, video, audio, subtitle, demo, or all 
+    --help,-h           print basic options
+    -h -opt             print detailed description of option. e.g. -h -y
+    -h topic=name       print all options for the topic:
+                        decoder, encoder, demuxer, muxer, filter
+    -h category         print all options of category: 
+                        info, global, file, video, audio, subtitle, demo, or all 
 ]]
 local options = {
     info_options, global_options, file_options, video_options, audio_options, subtitle_options,
@@ -202,33 +213,32 @@ local demo=[[
 -i centaur_1.mpg -f sdl --vcodec=rawvideo --pix_fmt=yuv420p -s:v 640x480
 -i centaur_1.mpg -c:v libx264 out.mp4
 ]]
-return function (v)
-    io.write(basic, '\n')
-    if type(v) == 'string' then
-        local _, opt = string.match(v, '(-+)(%w*)')
-        if not _ then
-            opt = options[v]
-            if opt then
-                io.write(opt[1], '\n', opt[2], '\n')
-            elseif v == 'all' then
-                for _,v in ipairs(options) do io.write(v[1],'\n', v[2], '\n') end
-            elseif v == 'demo' then
-                io.write(demo)
-            else
-                io.write('Invalid category: ', v)
-                os.exit(-1)
-            end
+
+local v = ...
+io.write(basic, '\n')
+if type(v) == 'string' then
+    local _, opt = string.match(v, '^(-+)(%w*)$')
+    if not _ then
+        opt = options[v]
+        if opt then
+            io.write(opt[1], '\n', opt[2], '\n')
+        elseif v == 'all' then
+            for _,v in ipairs(options) do io.write(v[1],'\n', v[2], '\n') end
+        elseif v == 'demo' then
+            io.write(demo)
         else
-            opt = description[opt]
-            if opt then
-                io.write(opt,'\n')
-            else
-                io.write('Invalid option: ', v)
-                os.exit(-1)
-            end
+            io.write('Invalid category: ', v)
+            os.exit(-1)
         end
     else
-        for _,v in ipairs(options) do io.write(v[1], '\n') end
+        opt = description[opt]
+        if opt then
+            io.write(opt,'\n')
+        else
+            io.write('Invalid option: ', v)
+            os.exit(-1)
+        end
     end
-    os.exit(0)
+else
+    for _,v in ipairs(options) do io.write(v[1], '\n') end
 end
