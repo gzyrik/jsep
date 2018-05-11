@@ -5,25 +5,29 @@ local function str2tab(str)
 end
 local function _getopt(arg, options, repl, start)
     local ret = {}
+    local mul ={}
     if options then
-        for k in string.gmatch(options, '(%w+)') do ret[k]={} end
+        for k in string.gmatch(options, '(%w+)') do mul[k]=true end
     end
     local i, argc = start, #arg
     local function setarg(k, x, y)
-        if y then
-            if ret[k][y] == x then return end
-            ret[k][y] = x
-        elseif type(ret[k]) == 'table' then
-            table.insert(ret[k], x or true)
+        if repl and type(repl[k]) == 'function' then
+            ret = repl[k](ret, i, x, y)
+        elseif k == '-' then
+            table.insert(ret, x)
+        elseif mul[k] then
+            if not ret[k] then ret[k] = {} end
+            if y then
+                ret[k][y] = x
+            else
+                table.insert(ret[k], x or true)
+            end
         elseif x then
             if ret[k] == x then return end
             ret[k] = x
         elseif not ret[k] then 
             ret[k] = true
-        else
-            return
         end
-        if repl and type(repl[k]) == 'function' then repl[k](ret, i, x, y) end
     end
     local function langarg(v, idx)
         local x = string.find(v, '=', idx, true)
@@ -38,16 +42,14 @@ local function _getopt(arg, options, repl, start)
         end
         if #k > 1 then
             local y = string.find(k, ':', 1, true)
-            if repl and not y and repl[k] then
+            if repl and not y and type(repl[k]) == 'string' then
                 k = repl[k]
                 y = string.find(k, ':', 1, true)
             end
             if y and y > 1 and y < #k then
                 local s, y = string.sub(k, 1, y-1), string.sub(k, y+1)
-                if repl and #s > 1 and repl[s] then s = repl[s] end
-                if type(ret[s]) == 'table' then --codec:a=aac
-                    return setarg(s, x, y)
-                end
+                if repl and #s > 1 and type(repl[s]) == 'string' then s = repl[s] end
+                if mul[s] then return setarg(s, x, y) end
             end
         end
         return setarg(k, x)
@@ -55,7 +57,7 @@ local function _getopt(arg, options, repl, start)
     while i <= argc do
         local v = arg[i]
         if string.byte(v, 1) ~= 45 then -- '-'
-            table.insert(ret, v)
+            setarg('-', v)
         elseif string.byte(v, 2) == 45 then -- '--'
             langarg(v, 3)
         else -- '-'
@@ -65,7 +67,9 @@ local function _getopt(arg, options, repl, start)
     end
     if repl then
         for k, v in pairs(repl) do
-            if ret[v] and not ret[k] then ret[k] = ret[v] end
+            if not ret[k] and type(v) == 'string' and type(ret[v]) == 'table' then
+                ret[k] = ret[v]
+            end
         end
     end
     return ret

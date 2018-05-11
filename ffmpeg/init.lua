@@ -60,6 +60,12 @@ local avfilter = load_lib{'avfilter-6'}
 local swscale = load_lib{'swscale-4'}
 ffi.C._chdir(path)
 --------------------------------------------------------------------------------
+local function FFERRTAG(a,b,c,d)
+    if type(a)=='string' then a,b,c,d = string.byte(a, 1, 4)
+    elseif type(b)=='string' then b,c,d = string.byte(b, 1, 3)
+    elseif type(c)=='string' then c,d = string.byte(c, 1, 2) end
+    return -bit.bxor(a, bit.lshift(b, 8), bit.lshift(c, 16), bit.lshift(d, 24))
+end
 local M={
     avutil = avutil,
     avcodec = avcodec,
@@ -67,6 +73,11 @@ local M={
     avformat = avformat,
     avfilter = avfilter,
 
+    AVERROR_INVAL = -22,
+    AVERROR_AGAIN = -11,
+    AVERROR_EIO = -5,
+
+    AVERROR_EOF = FFERRTAG'EOF ',
     AV_LOG_QUIET   = -8,
     AV_LOG_PANIC   = 0,
     AV_LOG_FATAL   = 8,
@@ -151,6 +162,14 @@ local M={
     AV_OPT_SEARCH_FAKE_OBJ = 2,
     AV_OPT_ALLOW_NULL = 4,
     AV_OPT_MULTI_COMPONENT_RANGE = 0x1000,
+
+
+    AVFILTER_FLAG_DYNAMIC_INPUTS = 1,
+    AVFILTER_FLAG_DYNAMIC_OUTPUTS= 2,
+    AVFILTER_FLAG_SLICE_THREADS = 4,
+    AVFILTER_FLAG_SUPPORT_TIMELINE_GENERIC=0x10000,
+    AVFILTER_FLAG_SUPPORT_TIMELINE_INTERNAL=0x20000,
+    AVFILTER_FLAG_SUPPORT_TIMELINE = 0x30000,
 }
 local Video = {}
 local VideoFrame = {}
@@ -487,8 +506,12 @@ M.assert = function (err, prefix)
     if err >= 0 then return end
     local errbuf = ffi.new('char[?]', 1024)
     if avutil.av_strerror(err, errbuf, 1024) < 0 then errbuf = ffi.C.strerror(err) end
-    avutil.av_log(nil, M.AV_LOG_ERROR, "%s: %s\n", prefix, errbuf)
+    avutil.av_log(nil, M.AV_LOG_FATAL, "%s: %s\n", prefix, errbuf)
     error(ffi.string(errbuf), 2)
+end
+M.error= function (msg, ...)
+    avutil.av_log(avcl, M.AV_LOG_FATAL, string.format(msg, ...))
+    error('', 2)
 end
 local function cache(v, e)
     local v,f= pcall(sym, avutil, e)

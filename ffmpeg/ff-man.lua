@@ -119,18 +119,17 @@ local description={
 }
 local info_options={'',[[
 Print help / information / capabilities:
-    -pix_fmts           show available pixel formats
-    -formats            show available formats
-    -muxers             show available muxers
-    -demuxers           show available demuxers
-    -devices            show available devices
+    -formats [pattern]  show available formats
+    -muxers  [pattern]  show available muxers
+    -demuxers [pattern] show available demuxers
+    -devices [pattern]  show available devices
     -codecs [pattern]   show available codecs
-    -decoders           show available decoders
-    -encoders           show available encoders
+    -decoders [pattern] show available decoders
+    -encoders [pattern] show available encoders
+    -filters [pattern]  show available filters
+    -pix_fmts [pattern] show available pixel formats
     -bsfs               show available bit stream filters
     -protocols          show available protocols
-    -filters            show available filters
-    -pix_fmts [pattern] show available pixel formats
     -layouts            show standard channel layouts
     -sample_fmts        show available audio sample formats
     -colors             show available color names
@@ -208,6 +207,9 @@ local options = {
     subtitle=subtitle_options,
 }
 local demo=[[
+-f lavfi -i mandelbrot -f sdl
+-f lavfi -i testsrc -f sdl
+-f lavfi -i testsrc -vf split[a][b];[a]pad=2*iw[1];[b]hflip[2];[1][2]overlay=w  -f sdl
 -f dshow -i "video=FaceTime HD Camera" -f sdl -c:v rawvideo -pix_fmt yuv420p
 -i centaur_1.mpg -f sdl -c:v rawvideo --pix_fmt=yuv420p
 -i centaur_1.mpg -f sdl --vcodec=rawvideo --pix_fmt=yuv420p -s:v 640x480
