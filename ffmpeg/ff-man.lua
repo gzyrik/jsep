@@ -209,27 +209,29 @@ local options = {
 local demo=[[
 -f lavfi -i mandelbrot -f sdl
 -f lavfi -i testsrc -f sdl
--f lavfi -i testsrc -vf split[a][b];[a]pad=2*iw[1];[b]hflip[2];[1][2]overlay=w  -f sdl
+-f lavfi -i testsrc \
+   -vf split[a][b];[a]pad=2*iw[1];[b]hflip[2];[1][2]overlay=w \
+   -f sdl -pix_fmt=rgb24
 -f dshow -i "video=FaceTime HD Camera" -f sdl -c:v rawvideo -pix_fmt yuv420p
 -i centaur_1.mpg -f sdl -c:v rawvideo --pix_fmt=yuv420p
 -i centaur_1.mpg -f sdl --vcodec=rawvideo --pix_fmt=yuv420p -s:v 640x480
 -i centaur_1.mpg -c:v libx264 out.mp4
 ]]
-
-local v = ...
+--------------------------------------------------------------------------------
+local h = ...
 io.write(basic, '\n')
-if type(v) == 'string' then
-    local _, opt = string.match(v, '^(-+)(%w*)$')
+if type(h) == 'string' then
+    local _, opt = string.match(h, '^(-+)(%w*)$')
     if not _ then
-        opt = options[v]
+        opt = options[h]
         if opt then
             io.write(opt[1], '\n', opt[2], '\n')
-        elseif v == 'all' then
+        elseif h == 'all' then
             for _,v in ipairs(options) do io.write(v[1],'\n', v[2], '\n') end
-        elseif v == 'demo' then
+        elseif h == 'demo' then
             io.write(demo)
         else
-            io.write('Invalid category: ', v)
+            io.write('Invalid category: ', h)
             os.exit(-1)
         end
     else
@@ -237,7 +239,7 @@ if type(v) == 'string' then
         if opt then
             io.write(opt,'\n')
         else
-            io.write('Invalid option: ', v)
+            io.write('Invalid option: ', h)
             os.exit(-1)
         end
     end

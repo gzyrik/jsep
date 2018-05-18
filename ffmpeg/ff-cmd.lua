@@ -41,13 +41,22 @@ local function next_codec_for_id(codec_id, encoder)
     end, encoder, nil
 end
 local function get_media_type_char(type)
-    if type == FFmpeg.AVMEDIA_TYPE_VIDEO then     return 'V';
-    elseif type == FFmpeg.AVMEDIA_TYPE_AUDIO then return 'A';
-    elseif type == FFmpeg.AVMEDIA_TYPE_DATA then  return 'D';
-    elseif type == FFmpeg.AVMEDIA_TYPE_SUBTITLE then   return 'S';
-    elseif type == FFmpeg.AVMEDIA_TYPE_ATTACHMENT then return 'T';
+    if type == FFmpeg.AVMEDIA_TYPE_VIDEO then     return 'V'
+    elseif type == FFmpeg.AVMEDIA_TYPE_AUDIO then return 'A'
+    elseif type == FFmpeg.AVMEDIA_TYPE_DATA then  return 'D'
+    elseif type == FFmpeg.AVMEDIA_TYPE_SUBTITLE then   return 'S'
+    elseif type == FFmpeg.AVMEDIA_TYPE_ATTACHMENT then return 'T'
+    else return '?','?' end
+end
+local function get_media_type_name(type)
+    if type == FFmpeg.AVMEDIA_TYPE_VIDEO then     return 'video'
+    elseif type == FFmpeg.AVMEDIA_TYPE_AUDIO then return 'audio'
+    elseif type == FFmpeg.AVMEDIA_TYPE_DATA then  return 'data'
+    elseif type == FFmpeg.AVMEDIA_TYPE_SUBTITLE then   return 'subtitle'
+    elseif type == FFmpeg.AVMEDIA_TYPE_ATTACHMENT then return 'attachment'
     else return '?' end
 end
+
 local function  show_help_children(class, flags)
     if class.option ~= nil then
         FFmpeg.av_opt_show2(ffi.new('void*[1]', ffi.cast('void*', class)), nil, flags, 0)
@@ -436,18 +445,13 @@ local function show_help_codec(name, encoder)
             name, encoder and "encoders" or "decoders")
         end
     else
-        FFmpeg.av_log(nil, FFmpeg.AV_LOG_ERROR,
-        "Codec '%s' is not recognized by FFmpeg.\n",
-        name);
+        FFmpeg.error("Codec '%s' is not recognized by FFmpeg.\n", name)
     end
 end
 local function show_help_demuxer(name)
     local fmt = FFmpeg.av_find_input_format(name)
+    if fmt == nil then FFmpeg.error("Unknown format '%s'.\n", name) end
 
-    if fmt == nil then
-        FFmpeg.av_log(nil,FFmpeg.AV_LOG_ERROR, "Unknown format '%s'.\n", name);
-        return
-    end
     io.write("Demuxer ", ffi.string(fmt.name),
     fmt.long_name == nil and '' or '['..ffi.string(fmt.long_name)..']',
     ':\n')
@@ -462,10 +466,7 @@ local function show_help_demuxer(name)
 end
 local function show_help_muxer(name)
     local fmt = FFmpeg.av_guess_format(name, nil, nil)
-    if fmt == nil then
-        FFmpeg.av_log(nil, FFmpeg.AV_LOG_ERROR, "Unknown format '%s'.\n", name);
-        return
-    end
+    if fmt == nil then FFmpeg.error("Unknown format '%s'.\n", name) end
 
     io.write("Muxer ", ffi.string(fmt.name),
     fmt.long_name == nil and '' or '['..ffi.string(fmt.long_name)..']',
@@ -490,10 +491,54 @@ local function show_help_muxer(name)
     end
 end
 local function show_help_filter(name)
+    local f = FFmpeg.avfilter_get_by_name(name)
+    if f == nil then FFmpeg.error("Unknown filter '%s'.\n", name) end
+
+    io.write("Filter ", ffi.string(f.name),'\n')
+    if f.description ~= nil then
+        io.write('  ', ffi.string(f.description), '\n')
+    end
+    if btest(f.flags, FFmpeg.AVFILTER_FLAG_SLICE_THREADS) then
+        io.write("    slice threading supported\n")
+    end
+
+    io.write("    Inputs:\n");
+    local count = FFmpeg.avfilter_pad_count(f.inputs);
+    for i=0, count-1 do
+        io.write(string.format("       #%d: %s (%s)\n",
+        i, ffi.string(FFmpeg.avfilter_pad_get_name(f.inputs, i)),
+        get_media_type_name(FFmpeg.avfilter_pad_get_type(f.inputs, i))))
+    end
+    if btest(f.flags, FFmpeg.AVFILTER_FLAG_DYNAMIC_INPUTS) then
+        io.write("        dynamic (depending on the options)\n")
+    elseif count == 0 then
+        io.write("        none (source filter)\n")
+    end
+
+    io.write("    Outputs:\n")
+    count = FFmpeg.avfilter_pad_count(f.outputs)
+    for i=0, count-1 do
+        io.write(string.format("       #%d: %s (%s)\n",
+        i, ffi.string(FFmpeg.avfilter_pad_get_name(f.outputs, i)),
+        get_media_type_name(FFmpeg.avfilter_pad_get_type(f.outputs, i))))
+    end
+    if btest(f.flags, FFmpeg.AVFILTER_FLAG_DYNAMIC_OUTPUTS) then
+        io.write("        dynamic (depending on the options)\n")
+    elseif count == 0 then
+        io.write("        none (sink filter)\n")
+    end
+
+    if f.priv_class ~= nil then
+        show_help_children(f.priv_class,
+        bit.bor(FFmpeg.AV_OPT_FLAG_VIDEO_PARAM,FFmpeg.AV_OPT_FLAG_FILTERING_PARAM,FFmpeg.AV_OPT_FLAG_AUDIO_PARAM))
+    end
+    if btest(f.flags, FFmpeg.AVFILTER_FLAG_SUPPORT_TIMELINE) then
+        io.write("This filter has support for timeline through the 'enable' option.\n");
+    end
 end
 ----------------------------------------------------------------------------------
 if opt.v then opt_loglevel(opt.v) end
---if not opt.hide_banner then show_banner() end
+if not opt.hide_banner then show_banner() end
 if opt.protocols then show_protocols() end
 if opt.filters then show_filters(opt.filters) end
 if opt.pix_fmts then show_pix_fmts(opt.pix_fmts) end
@@ -509,6 +554,9 @@ elseif opt.encoders then print_codecs(true, opt.encoders) end
 
 if opt.h then
     local topic, name = string.match(opt.h, '(%w+)=(%w+)')
+    if string.len(name) == 0 then
+        FFmpeg.error("No %s name specified.\n", topic);
+    end
     if topic == "decoder" then
         show_help_codec(name, false)
     elseif topic == "encoder" then

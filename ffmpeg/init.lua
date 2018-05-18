@@ -157,6 +157,7 @@ local M={
     AV_OPT_FLAG_AUDIO_PARAM    = 8,
     AV_OPT_FLAG_VIDEO_PARAM    = 16,
     AV_OPT_FLAG_SUBTITLE_PARAM = 32,
+    AV_OPT_FLAG_FILTERING_PARAM= 0x10000,
 
     AV_OPT_SEARCH_CHILDREN = 1,
     AV_OPT_SEARCH_FAKE_OBJ = 2,
@@ -499,6 +500,7 @@ M.Video = Video
 M.VideoFrame = VideoFrame
 local function sym(lib, func) return lib[func] end
 M.assert = function (err, prefix)
+    if err == 0 or err == true then return end
     if type(err) ~= 'number' then
         if err == nil then error(prefix, 2) end
         return

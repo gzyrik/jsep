@@ -15,11 +15,13 @@ local function perfile(ret, x)
     if x then ret[-1] = x end
     return ret
 end
-----------------------------------------------------------------------------------
+local function url(file) return file and file[-1] end
+--------------------------------------------------------------------------------
 local arg=...
-local ret = dofile('getopt.lua')(arg, 'c,s,m',{
+local ret = dofile('getopt.lua')(arg, 'c,s,m,filter',{
     help='h', map='m', codec='c',
     acodec='c:a', vcodec='c:v',
+    vf='filter:v', af='filter:a',
 
     h=function(ret, i, x)
         opt.h = x or arg[i+1] or true
@@ -36,7 +38,8 @@ local ret = dofile('getopt.lua')(arg, 'c,s,m',{
 })
 ret = perfile(ret)
 if next(ret) then table.insert(opt, ret) end
-----------------------------------------------------------------------------------
+if not next(opt) and #inputs == 0 then opt.h = 'demo' end
+--------------------------------------------------------------------------------
 if opt.h then 
     if type(opt.h) ~= 'string' or not string.match(opt.h, '(%w+)=(%w+)') then
         local man, ret = loadfile('ff-man.lua')
@@ -45,7 +48,7 @@ if opt.h then
         os.exit(0)
     end
 end
-----------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 local FFmpeg, ret = loadfile('init.lua')
 assert(FFmpeg, ret)
 FFmpeg = FFmpeg(opt.sdk or 'Z:/develop/ffmpeg-3.4.2-win64')
@@ -54,7 +57,7 @@ assert(cmd, ret)
 cmd, ret = pcall(cmd, FFmpeg, opt)
 assert(cmd, ret)
 if #inputs ==0 then os.exit(0) end
-----------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
 local ffi, bit = require'ffi', require'bit'
 local function prepare(files, input)
     for _, file in ipairs(files) do
@@ -84,7 +87,31 @@ local function prepare(files, input)
 end
 prepare(inputs, true)
 prepare(opt, false)
-opt.codec_dict = function(opts, codec_id, fmtcxt, stream, codec)
+--------------------------------------------------------------------------------
+local function fmtctx(file, output)
+    if file[0] then return file[0].fmtctx[0] end
+    local name, ctx = url(file), ffi.new('AVFormatContext*[1]')
+    ffi.gc(ctx, FFmpeg.avformat_close_input)
+
+    file[0] = { fmtctx = ctx }
+    if output then
+        local ret = FFmpeg.avformat_alloc_output_context2(ctx, nil, file.f,  name)
+        FFmpeg.assert(ret, name)
+    else
+        for _, ofile in ipairs(opt) do
+            if ofile == file then error('output file as input', 2) end
+        end
+        local ret = FFmpeg.avformat_open_input(ctx, name, file.f, nil)--TODO options
+        FFmpeg.assert(ret, name)
+
+        local ret = FFmpeg.avformat_find_stream_info(ctx[0], nil)
+        FFmpeg.assert(ret, name)
+
+        FFmpeg.av_dump_format(ctx[0], 0, name, 0)
+    end
+    return file[0].fmtctx[0]
+end
+local function codec_dict (opts, codec_id, fmtcxt, stream, codec)
     local ret = ffi.new('AVDictionary*[1]')
     ffi.gc(ret, FFmpeg.av_dict_free)
     local cc = ffi.new('void*[1]', ffi.cast('void*', FFmpeg.avcodec_get_class()))
@@ -141,77 +168,84 @@ opt.codec_dict = function(opts, codec_id, fmtcxt, stream, codec)
     end
     return ret
 end
-local function filter_map (arg, dft_spec, ret, fmtctx)
-    local p1, map,sync,label,sid = 1, arg
-    local disabled = string.byte(map, p1) == 126 -- '~' disable
+local function for_stream(name, dft_spec)
+    local uidx, spec = string.match(name, '^(%d*)(.*)$')
+    uidx = tonumber(uidx)
+    if uidx >= #inputs or uidx < 0 then
+        FFmpeg.error("Invalid input file index: %d.\n", uidx)
+    end
+    if #spec == 0 then
+        if type(dft_spec) == 'string' then spec = dft_spec end
+    elseif string.byte(spec, 1) == 58 then -- ':'
+        spec = string.sub(spec, 2)
+    end
+    local uid = uidx+1
+    local ctx = fmtctx(inputs[uid])
+    return function(ctx, sid)
+        while sid < ctx.nb_streams do
+            if FFmpeg.avformat_match_stream_specifier(ctx, ctx.streams[sid], spec) > 0  then
+                return sid+1, uid, ctx.streams[sid]
+            end
+            sid = sid + 1
+        end
+    end, ctx, 0
+end
+local function parse_stream_map (map_desc, dft_spec, maps)
+    local p1, desc,sync,label,has_sid = 1, map_desc
+    local disabled = string.byte(desc, p1) == 126 -- '~' disable
     if disabled then p1 = p1 + 1 end
 
-    local p2 =  string.find(map, ',', p1, true)
+    local p2 =  string.find(desc, ',', p1, true)
     if p2 then --parse sync stream first, just pick first matching stream
-        local sync_id, sync_spc = string.match(map, '^(%d*).(.*)$', p2+1)
-        map, p1 = string.sub(map, p1, p2-p1), 1
+        local sync_id, sync_spc = string.match(desc, '^(%d*).(.*)$', p2+1)
+        desc, p1 = string.sub(desc, p1, p2-p1), 1
         if not disabled then sync = {sync_id, sync_spc} end
     end
-    p2 =  string.find(map, '[', p1, true)
+    p2 =  string.find(desc, '[', p1, true)
     if p2 then --'[label]' this mapping refers to lavfi output
-        label = string.match(map, "^(.*)%]$", p2+1)
+        label = string.match(desc, "^(.*)%]$", p2+1)
         if not label then
-            FFmpeg.av_log(nil, FFmpeg.AV_LOG_FATAL, "Invalid output link label: %s.\n", map);
+            FFmpeg.av_log(nil, FFmpeg.AV_LOG_FATAL, "Invalid output link label: %s.\n", desc);
             os.exit(-1)
         end
         if not disabled then
-            ret[label] = sync or true
-        elseif ret[label] then
-            ret[label] = nil
+            maps[label] = sync or true
+        elseif maps[label] then
+            maps[label] = nil
         end
-        print('*', label, disabled)
-        map, p1 = string.sub(map, p1, p2-p1), 1
+        print('*label', label, disabled)
+        desc, p1 = string.sub(desc, p1, p2-p1), 1
     end
-    p2 =  string.find(map, '?', p1, true)
+    p2 =  string.find(desc, '?', p1, true)
     if p2 then
         allow_unused = true
-        map, p1 = string.sub(map, p1, p2-p1), 1
+        desc, p1 = string.sub(desc, p1, p2-p1), 1
     end
-    local uidx, spec = string.match(map, '^(%d*)(.*)$', p1)
-    uidx = tonumber(uidx)
-    if uidx then
-        if uidx >= #inputs or uidx < 0 then
-            FFmpeg.error("Invalid input file index: %d.\n", uidx)
-        end
-        if #spec == 0 then
-            if type(dft_spec) == 'string' then spec = dft_spec end
-        else
-            spec = string.sub(spec, 2)
-        end
-        
-        local uid = uidx+1
-        local ctx = fmtctx(inputs[uid])--TODO
-        for i=0,ctx.nb_streams-1 do
-            if FFmpeg.avformat_match_stream_specifier(ctx, ctx.streams[i], spec) > 0 then
-                sid = i+1
-                if not disabled then
-                    if not ret[uid] then ret[uid] = {} end
-                    ret[uid][sid] = sync or {uid, sid}
-                elseif ret[uid] and ret[uid][sid] then
-                    ret[uid][sid] = nil
-                    if not next(ret[uid]) then ret[uid] = nil end
-                end
-                print('*', uid, sid, disabled)
-            end
+    for sid, uid in for_stream(string.sub(desc, p1), dft_spec) do
+        has_sid = true
+        if not disabled then
+            if not maps[uid] then maps[uid] = {} end
+            assert(not maps[uid][sid])
+            maps[uid][sid] = sync or {uid, sid}
+            print('*map', uid, sid)
+        elseif ret[uid] and maps[uid][sid] then
+            maps[uid][sid] = nil
+            print('*umap', uid, sid)
+            if not next(maps[uid]) then maps[uid] = nil end
         end
     end
-    if not label and not sid then
+    if not label and not has_sid then
         if allow_unused or disabled then
-            FFmpeg.av_log(nil, FFmpeg.AV_LOG_VERBOSE, "Stream map '%s' matches no streams; ignoring.\n", arg)
+            FFmpeg.av_log(nil, FFmpeg.AV_LOG_VERBOSE, "Stream map '%s' matches no streams; ignoring.\n", map_desc)
         else
-            FFmpeg.error("Stream map '%s' matches no streams.\nTo ignore this, add a trailing '?' to the map.\n", arg)
+            FFmpeg.error("Stream map '%s' matches no streams.\nTo ignore this, add a trailing '?' to the map.\n", map_desc)
         end
     end
 end
-local guess_map = function (ofile, fmtctx)
+local guess_map = function (ofile)
     local m = {}
     if not ofile.vn then
-        ofile.vn = FFmpeg.av_guess_codec(fmtctx(ofile).oformat, nil, ofile[-1], nil, FFmpeg.AVMEDIA_TYPE_VIDEO) == FFmpeg.AV_CODEC_ID_NONE
+        ofile.vn = FFmpeg.av_guess_codec(fmtctx(ofile).oformat, nil, url(ofile), nil, FFmpeg.AVMEDIA_TYPE_VIDEO) == FFmpeg.AV_CODEC_ID_NONE
     end
     if not ofile.vn then
         local best_area, uidx, sidx=0
@@ -227,22 +261,116 @@ local guess_map = function (ofile, fmtctx)
         end
         if sidx then
             local val = uidx..':'..sidx
-            FFmpeg.av_log(nil, FFmpeg.AV_LOG_WARNING, "Guess video map '%s' of '%s' from '%s'\n", val, ofile[-1], inputs[uidx+1][-1])
+            FFmpeg.av_log(fmtctx(ofile), FFmpeg.AV_LOG_WARNING,
+            "Guess video map '%s' of '%s' from '%s'\n", val, url(ofile), url(inputs[uidx+1]))
             table.insert(m, val)
         end
     end
     return m
 end
-opt.stream_map = function (ofile, fmtctx)
+local function find_stream_by_filter(input, dft_spec, graph_desc)
+    local mtype = FFmpeg.avfilter_pad_get_type(input.filter_ctx.input_pads, input.pad_idx)
+    if  input.name ~= nil then
+        for sid, uid, st in for_stream(ffi.string(input.name)) do
+            if st.codecpar.codec_type == mtype then return uid, sid end
+        end
+        FFmpeg.error("Stream specifier '%s' in filtergraph description %s "..
+        "matches no streams.\n", p, graph_desc)
+    else -- find the first unused stream of corresponding type
+        for uid, ifile in ipairs(inputs) do
+            local ctx = fmtctx(ifile)
+            for i=#ifile, ctx.nb_streams-1 do
+                if ctx.streams[i].codecpar.codec_type == mtype then return uid, i+1 end
+            end
+        end
+        FFmpeg.error("Cannot find a matching stream for "..
+        "unlabeled input pad %d on filter %s\n", input.pad_idx, ffi.string(input.filter_ctx.name))
+    end
+end
+local function parse_filter_map(graph_desc, dft_spec, maps)
+    local simple = true
+    local graph = ffi.new('AVFilterGraph*[1]')
+    ffi.gc(graph, FFmpeg.avfilter_graph_free)
+    local inputs, outputs= ffi.new('AVFilterInOut*[1]'),ffi.new('AVFilterInOut*[1]')
+    ffi.gc(inputs, FFmpeg.avfilter_inout_free)
+    ffi.gc(outputs, FFmpeg.avfilter_inout_free)
+
+    graph[0] = FFmpeg.avfilter_graph_alloc()
+    local ret = FFmpeg.avfilter_graph_parse2(graph[0], graph_desc, inputs, outputs)
+    FFmpeg.assert(ret, 'avfilter_graph_parse2')
+    if simple then
+        if outputs[0] == nil then
+            num_outputs = '0'
+        elseif outputs[0].next ~= nil then
+            num_outputs = '>1'
+        else
+            num_outputs = '1'
+        end
+        if inputs[0] == nil then
+            num_inputs = '0'
+        elseif inputs[0].next ~= nil then
+            num_inputs = '>1'
+        else
+            num_inputs = '1'
+        end
+        if num_outputs ~='1' and num_inputs ~= '1' then
+            FFmpeg.error("Simple filtergraph '%s' was expected "..
+            "to have exactly 1 input and 1 output."..
+            " However, it had %s input(s) and %s output(s)."..
+            " Please adjust, or use a complex filtergraph (-filter_complex) instead.\n",
+            graph_desc, num_inputs, num_outputs)
+        end
+    end
+    local cur, i = inputs[0], 0
+    while cur ~= nil do
+        local sid, uid = find_stream_by_filter(cur, dft_spec, graph_desc)
+        if not maps[uid] then maps[uid] = {} end
+        assert(not maps[uid][sid])
+        maps[uid][sid] = {filter={graph=graph, inputs=inputs, outputs=outputs}}
+        print('*graph', uid, sid)
+        cur = cur.next
+        i = i + i
+    end
+end
+local function stream_map (ofile)
     local maps={}
     if ofile.m then
-        for k, v in pairs(ofile.m) do filter_map(v, k, maps, fmtctx) end
+        for k, v in pairs(ofile.m) do parse_stream_map(v, k, maps) end
     end
-    if not next(maps) then
-        ofile.m = guess_map(ofile, fmtctx)
-        for k, v in pairs(ofile.m) do filter_map(v, k, maps, fmtctx) end
+    if ofile.filter then
+        for k, v in pairs(ofile.filter) do parse_filter_map(v, k, maps) end
+    elseif not next(maps) then
+        ofile.m = guess_map(ofile)
+        for k, v in pairs(ofile.m) do parse_stream_map(v, k, maps) end
     end
-    return next(maps) and maps or nil
+    return maps
 end
-----------------------------------------------------------------------------------
+local function choose_pix_fmt(codec, target)
+    local p = codec.pix_fmts
+    local desc = FFmpeg.av_pix_fmt_desc_get(target);
+    local has_alpha = desc ~= nil and bit.band(desc.nb_components, 1) == 0
+    local best= FFmpeg.AV_PIX_FMT_NONE
+    while p[0] ~= FFmpeg.AV_PIX_FMT_NONE do
+        if p[0] == target then return target end
+        best = FFmpeg.avcodec_find_best_pix_fmt_of_2(best, p[0], target, has_alpha, nil)
+        p = p + 1
+    end
+    if p[0] == FFmpeg.AV_PIX_FMT_NONE then
+        if target ~= FFmpeg.AV_PIX_FMT_NONE then
+            FFmpeg.av_log(nil, FFmpeg.AV_LOG_WARNING,
+            "Incompatible pixel format '%s' for codec '%s', auto-selecting format '%s'\n",
+            FFmpeg.av_get_pix_fmt_name(target),
+            codec.name,
+            FFmpeg.av_get_pix_fmt_name(best))
+            return best
+        end
+    end
+    return target
+end
+--------------------------------------------------------------------------------
+opt.url = url
+opt.fmtctx = fmtctx
+opt.stream_map = stream_map
+opt.codec_dict = codec_dict
+opt.choose_pix_fmt = choose_pix_fmt
 return FFmpeg, opt, inputs
