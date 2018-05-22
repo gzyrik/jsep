@@ -88,6 +88,22 @@ end
 prepare(inputs, true)
 prepare(opt, false)
 --------------------------------------------------------------------------------
+local function format_dict(opts)
+    local ret = ffi.new('AVDictionary*[1]')
+    ffi.gc(ret, FFmpeg.av_dict_free)
+    local cc = ffi.new('void*[1]', ffi.cast('void*', FFmpeg.avformat_get_class()))
+    for k, v in pairs(opts) do
+        if type(k) ~= 'string' or type(v) ~= 'string' then goto continue end
+
+        if nil ~= FFmpeg.av_opt_find(cc, k, nil, 0,
+            bit.bor(FFmpeg.AV_OPT_SEARCH_CHILDREN, FFmpeg.AV_OPT_SEARCH_FAKE_OBJ)) then
+            FFmpeg.av_dict_set(ret, k, v, 0)
+            FFmpeg.av_log(nil, FFmpeg.AV_LOG_DEBUG, "format opts: %s = %s\n", k, v);
+        end
+        ::continue::
+    end
+    return ret
+end
 local function fmtctx(file, output)
     if file[0] then return file[0].fmtctx[0] end
     local name, ctx = url(file), ffi.new('AVFormatContext*[1]')
@@ -101,7 +117,7 @@ local function fmtctx(file, output)
         for _, ofile in ipairs(opt) do
             if ofile == file then error('output file as input', 2) end
         end
-        local ret = FFmpeg.avformat_open_input(ctx, name, file.f, nil)--TODO options
+        local ret = FFmpeg.avformat_open_input(ctx, name, file.f, format_dict(file))
         FFmpeg.assert(ret, name)
 
         local ret = FFmpeg.avformat_find_stream_info(ctx[0], nil)
@@ -146,8 +162,7 @@ local function codec_dict (opts, codec_id, fmtcxt, stream, codec)
             local s = string.sub(k, p+1)
             local ret = FFmpeg.avformat_match_stream_specifier(fmtcxt, stream, s);
             if ret < 0 then
-                FFmpeg.av_log(fmtcxt, FFmpeg.AV_LOG_ERROR, "Invalid stream specifier: %s\n", s)
-                os.exit(-1)
+                FFmpeg.error(fmtcxt, "Invalid stream specifier: %s\n", s)
             elseif ret == 0 then
                 goto continue --skip
             else

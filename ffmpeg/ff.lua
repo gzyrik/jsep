@@ -178,9 +178,7 @@ local function open_ofile(ofile)
     if bit.band(ctx.oformat.flags, FFmpeg.AVFMT_NOFILE) == 0 then 
         if not _OPT.y and io.open(name, 'r') then
             if _OPT.n then
-                FFmpeg.av_log(nil, FFmpeg.AV_LOG_ERROR,
-                "File '%s' already exists. Exiting.", name)
-                os.exit(0)
+                FFmpeg.error(ctx, "File '%s' already exists. Exiting.", name)
             else
                 FFmpeg.av_log(nil, FFmpeg.AV_LOG_ERROR,
                 "File '%s' already exists. Overwrite ? [y/N]", name)

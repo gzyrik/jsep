@@ -79,7 +79,9 @@ local M={
     AVERROR_AGAIN = -11,
     AVERROR_EIO = -5,
 
+    AVERROR_EXIT = FFERRTAG'EXIT',
     AVERROR_EOF = FFERRTAG'EOF ',
+
     AV_LOG_QUIET   = -8,
     AV_LOG_PANIC   = 0,
     AV_LOG_FATAL   = 8,
@@ -511,10 +513,13 @@ M.assert = function (err, prefix)
     local errbuf = ffi.new('char[?]', 1024)
     if avutil.av_strerror(err, errbuf, 1024) < 0 then errbuf = ffi.C.strerror(err) end
     avutil.av_log(nil, M.AV_LOG_FATAL, "%s: %s\n", prefix, errbuf)
+    if err == M.AVERROR_EXIT then os.exit(0) end
     error(ffi.string(errbuf), 2)
 end
-M.error= function (msg, ...)
-    avutil.av_log(avcl, M.AV_LOG_FATAL, string.format(msg, ...))
+M.error= function (...)
+    local idx, avcl = 1
+    if type(select(1, ...)) ~= 'string' then avcl,idx = select(1, ...), 2 end
+    avutil.av_log(avcl, M.AV_LOG_FATAL, string.format(select(idx, ...)))
     error('', 2)
 end
 local function cache(v, e)
