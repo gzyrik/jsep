@@ -46,7 +46,7 @@ local function get_media_type_char(type)
     elseif type == FFmpeg.AVMEDIA_TYPE_DATA then  return 'D'
     elseif type == FFmpeg.AVMEDIA_TYPE_SUBTITLE then   return 'S'
     elseif type == FFmpeg.AVMEDIA_TYPE_ATTACHMENT then return 'T'
-    else return '?','?' end
+    else return '?' end
 end
 local function get_media_type_name(type)
     if type == FFmpeg.AVMEDIA_TYPE_VIDEO then     return 'video'
@@ -423,7 +423,7 @@ local function print_codec(c)
     end
 end
 local function show_help_codec(name, encoder)
-    local codec
+    local codec, printed
     if encoder then
         codec = FFmpeg.avcodec_find_encoder_by_name(name)
     else
@@ -431,21 +431,18 @@ local function show_help_codec(name, encoder)
     end
     if codec ~= nil then return print_codec(codec) end
     local desc = FFmpeg.avcodec_descriptor_get_by_name(name)
-    if desc ~= nil then
-        local printed
-        for codec in next_codec_for_id(desc.id, codec, encoder) do
-            printed = true
-            print_codec(codec)
-        end
-        if not printed then
-            FFmpeg.av_log(nil, FFmpeg.AV_LOG_ERROR,
-            "Codec '%s' is known to FFmpeg, "..
-            "but no %s for it are available. FFmpeg might need to be "..
-            "recompiled with additional external libraries.\n",
-            name, encoder and "encoders" or "decoders")
-        end
-    else
-        FFmpeg.error("Codec '%s' is not recognized by FFmpeg.\n", name)
+    if desc == nil then FFmpeg.error("Codec '%s' is not recognized by FFmpeg.\n", name) end
+
+    for codec in next_codec_for_id(desc.id, codec, encoder) do
+        printed = true
+        print_codec(codec)
+    end
+    if not printed then
+        FFmpeg.av_log(nil, FFmpeg.AV_LOG_ERROR,
+        "Codec '%s' is known to FFmpeg, "..
+        "but no %s for it are available. FFmpeg might need to be "..
+        "recompiled with additional external libraries.\n",
+        name, encoder and "encoders" or "decoders")
     end
 end
 local function show_help_demuxer(name)
@@ -554,9 +551,14 @@ elseif opt.encoders then print_codecs(true, opt.encoders) end
 
 if opt.h then
     local topic, name = string.match(opt.h, '(%w+)=(%w+)')
-    if string.len(name) == 0 then
-        FFmpeg.error("No %s name specified.\n", topic);
-    end
+    if string.len(name) == 0 then FFmpeg.error("No %s name specified.\n", topic) end
+
+    local strbuf = ffi.new('char[?]', 1024)
+    FFmpeg.av_log_set_callback(ffi.cast("void (*)(void*, int, const char*, va_list)",
+    function(ptr, level, fmt, vl)
+        ffi.C.vsprintf(strbuf, fmt, vl)
+        io.write(ffi.string(strbuf))
+    end))
     if topic == "decoder" then
         show_help_codec(name, false)
     elseif topic == "encoder" then
@@ -569,6 +571,6 @@ if opt.h then
         show_help_filter(name)
     else
         io.stderr:write('Invalid topic: ', opt.h, '\n')
-        os.exit(-1)
     end
+    os.exit(0)
 end

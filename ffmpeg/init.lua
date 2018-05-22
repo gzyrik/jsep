@@ -31,6 +31,8 @@ if ffi.cset(ffmpeg_def) then
     ffi.cdef(def)
     ffi.cdef[[
     int strcmp(const char*, const char*);
+    int vprintf (const char*, va_list);
+    int vsprintf (char*, const char*, va_list);
     const char* strstr(const char*, const char*);
     int _chdir(const char *path);
     char *_getcwd(char *buffer,  int maxlen);
