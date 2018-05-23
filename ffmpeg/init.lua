@@ -1,80 +1,13 @@
-local ffi = require'ffi'
-local bit = require'bit'
-local ffmpeg_dir = ...
-local ffmpeg_bin = ffmpeg_dir .. '/bin'
-local ffmpeg_def = ffmpeg_dir .. '/def.lua'
-if ffi.cset(ffmpeg_def) then
-    local ffmpeg_inc = ffmpeg_dir .. '/include'
-    local includes_path = os.tmpname()
-    -- Write includes to a temporary file
-    local includes_file = io.open(includes_path, 'w+')
-    includes_file:write[[
-    #include <libavcodec/avcodec.h>
-    #include <libavformat/avformat.h>
-    #include <libavdevice/avdevice.h>
-    #include <libswscale/swscale.h>
-    #include <libswresample/swresample.h>
-    #include <libavutil/avutil.h>
-    #include <libavutil/opt.h>
-    #include <libavutil/time.h>
-    #include <libavutil/imgutils.h>
-    #include <libavfilter/avfilter.h>
-    #include <libavfilter/buffersrc.h>
-    #include <libavfilter/buffersink.h>
-    ]]
-    includes_file:close()
-
-    -- Preprocess header files to get C declarations
-    local cpp_output = io.popen('cpp '..ffmpeg_inc..' '..includes_path)
-    local def = cpp_output:read('*all')
-    cpp_output:close()
-    ffi.cdef(def)
-    ffi.cdef[[
-    int strcmp(const char*, const char*);
-    int vprintf (const char*, va_list);
-    int vsprintf (char*, const char*, va_list);
-    const char* strstr(const char*, const char*);
-    int _chdir(const char *path);
-    char *_getcwd(char *buffer,  int maxlen);
-    char *strerror(int err);
-    ]]
-    ffi.cdump(ffmpeg_def)
-end
-
-local function load_lib(t)
-  local err = ''
-  for _, name in ipairs(t) do
-    local ok, mod = pcall(ffi.load, name)
-    if ok then return mod, name end
-    err = err .. '\n' .. mod
-  end
-  error(err)
-end
-
-local path = ffi.new("char[?]", 1024)
-ffi.C._getcwd(path, 1024)
-ffi.C._chdir(ffmpeg_bin)
-local avutil = load_lib{'avutil-55'}
-local avcodec = load_lib{'avcodec-57'}
-local avformat = load_lib{'avformat-57'}
-local avdevice = load_lib{'avdevice-57'}
-local avfilter = load_lib{'avfilter-6'}
-local swscale = load_lib{'swscale-4'}
-ffi.C._chdir(path)
+local SDK, CDEF = ...
 --------------------------------------------------------------------------------
+local ffi, bit = require'ffi', require'bit'
 local function FFERRTAG(a,b,c,d)
     if type(a)=='string' then a,b,c,d = string.byte(a, 1, 4)
     elseif type(b)=='string' then b,c,d = string.byte(b, 1, 3)
     elseif type(c)=='string' then c,d = string.byte(c, 1, 2) end
     return -bit.bxor(a, bit.lshift(b, 8), bit.lshift(c, 16), bit.lshift(d, 24))
 end
-local M={
-    avutil = avutil,
-    avcodec = avcodec,
-    avdevice = avdevice,
-    avformat = avformat,
-    avfilter = avfilter,
-
+local M = {
     AVERROR_INVAL = -22,
     AVERROR_AGAIN = -11,
     AVERROR_EIO = -5,
@@ -110,7 +43,7 @@ local M={
 
     AV_PKT_FLAG_KEY   =  0x0001,
     AV_PKT_FLAG_CORRUPT = 0x0002, 
-   
+
     AV_DICT_MATCH_CAS为 = 1,
     AV_DICT_IGNORE_SUFFIX = 2,
     AV_DICT_DONT_STRDUP_KEY = 4,
@@ -176,332 +109,62 @@ local M={
     AVFILTER_FLAG_SUPPORT_TIMELINE_INTERNAL=0x20000,
     AVFILTER_FLAG_SUPPORT_TIMELINE = 0x30000,
 }
-local Video = {}
-local VideoFrame = {}
-
---avutil.av_log_set_level(M.AV_LOG_ERROR)
-avutil.av_log_set_flags(M.AV_LOG_SKIP_REPEATED)
-
-avcodec.avcodec_register_all()
-avdevice.avdevice_register_all()
-avfilter.avfilter_register_all()
-avformat.av_register_all()
-avformat.avformat_network_init();
-
-local function copy_object(original)
-  local copy
-  if type(original) == 'table' then
-    copy = {}
-    for k, v in pairs(original) do
-      copy[k] = v
-    end
-    setmetatable(copy, getmetatable(original))
-  else
-    copy = original
-  end
-  return copy
+--------------------------------------------------------------------------------
+if ffi.cset(CDEF) then
+    local tmpf = os.tmpname()
+    local file = io.open(tmpf, 'w+')
+    file:write[[
+    #include <libavcodec/avcodec.h>
+    #include <libavformat/avformat.h>
+    #include <libavdevice/avdevice.h>
+    #include <libswscale/swscale.h>
+    #include <libswresample/swresample.h>
+    #include <libavutil/avutil.h>
+    #include <libavutil/opt.h>
+    #include <libavutil/time.h>
+    #include <libavutil/imgutils.h>
+    #include <libavfilter/avfilter.h>
+    #include <libavfilter/buffersrc.h>
+    #include <libavfilter/buffersink.h>
+    ]]
+    file:close()
+    local file = io.popen(CWD..'cpp '..SDK..'include'..' '..tmpf)
+    local cdef = file:read('*all')
+    file:close()
+    ffi.cdef(cdef)
+    ffi.cdef[[
+    int strcmp(const char*, const char*);
+    int vsprintf (char*, const char*, va_list);
+    const char* strstr(const char*, const char*);
+    int _chdir(const char *path);
+    char *_getcwd(char *buffer,  int maxlen);
+    char *strerror(int err);
+    ]]
+    ffi.cdump(CDEF)
 end
-
-local function new_video_frame(ffi_frame)
-  local self = {ffi_frame = ffi_frame}
-  setmetatable(self, {__index = VideoFrame})
-
-  return self
+--------------------------------------------------------------------------------
+local cwd = ffi.new("char[?]", 1024)
+ffi.C._getcwd(cwd, 1024)
+local ret = ffi.C._chdir(SDK..'bin')
+assert(ret == 0, '\nInvalid sdk dir: ' ..SDK)
+local file = io.popen('dir /B *.dll')
+for line in file:lines() do
+    local ok, mod = pcall(ffi.load, line)
+    assert(ok, mod)
+    local name = string.match(line, '^(.*)-%d*%.dll$')
+    M[name] = mod
 end
-
-local function create_frame_reader(self)
-  local frame_reader = coroutine.create(function()
-    local packet = ffi.new('AVPacket[1]')
-    avcodec.av_init_packet(packet)
-    ffi.gc(packet, avcodec.av_packet_unref)
-
-    local frame = ffi.new('AVFrame*[1]', avutil.av_frame_alloc())
-    if frame[0] == 0 then
-      error('Failed to allocate frame')
-    end
-    ffi.gc(frame, function(ptr)
-      avutil.av_frame_unref(ptr[0])
-      avutil.av_frame_free(ptr)
-    end)
-
-    local filtered_frame
-    if self.is_filtered then
-      filtered_frame = ffi.new('AVFrame*[1]', avutil.av_frame_alloc())
-      if filtered_frame[0] == 0 then
-        error('Failed to allocate filtered_frame')
-      end
-      ffi.gc(filtered_frame, function(ptr)
-        avutil.av_frame_unref(ptr[0])
-        avutil.av_frame_free(ptr)
-      end)
-    end
-
-    while avformat.av_read_frame(self.format_context[0], packet) == 0 do
-      -- Make sure packet is from video stream
-      if packet[0].stream_index == self.video_stream_index then
-        -- Reset fields in frame
-        avutil.av_frame_unref(frame[0])
-
-        local got_frame = ffi.new('int[1]')
-        if avcodec.avcodec_decode_video2(self.video_decoder_context, frame[0], got_frame, packet) < 0 then
-          error('Failed to decode video frame')
-        end
-
-        if got_frame[0] ~= 0 then
-          if self.is_filtered then
-            -- Push the decoded frame into the filtergraph
-            if avfilter.av_buffersrc_add_frame_flags(self.buffersrc_context[0],
-              frame[0], avfilter.AV_BUFFERSRC_FLAG_KEEP_REF) < 0
-            then
-              error('Error while feeding the filtergraph')
-            end
-
-            -- Pull filtered frames from the filtergraph
-            avutil.av_frame_unref(filtered_frame[0]);
-            while avfilter.av_buffersink_get_frame(self.buffersink_context[0], filtered_frame[0]) >= 0 do
-              coroutine.yield(filtered_frame[0], 'video')
-            end
-          else
-            coroutine.yield(frame[0], 'video')
-          end
-        end
-
-      else
-        -- TODO: Audio frames
-      end
-    end
-  end)
-
-  return frame_reader
-end
-
----- Opens a video file for reading.
---
--- @string path A relative or absolute path to the video file.
--- @treturn Video
-function M.new(path)
-  local self = {is_filtered = false}
-  setmetatable(self, {__index = Video})
-
-  self.format_context = ffi.new('AVFormatContext*[1]')
-  if avformat.avformat_open_input(self.format_context, path, nil, nil) < 0 then
-    error('Failed to open video input for ' .. path)
-  end
-
-  -- Release format context when collected by the GC
-  ffi.gc(self.format_context, avformat.avformat_close_input)
-
-  -- Calculate info about the stream
-  if avformat.avformat_find_stream_info(self.format_context[0], nil) < 0 then
-    error('Failed to find stream info for ' .. path)
-  end
-
-  -- Select video stream
-  local decoder = ffi.new('AVCodec*[1]')
-  self.video_stream_index = avformat.av_find_best_stream(
-    self.format_context[0], avformat.AVMEDIA_TYPE_VIDEO, -1, -1, decoder, 0)
-  if self.video_stream_index < 0 then
-    error('Failed to find video stream for ' .. path)
-  end
-
-  self.video_decoder_context = self.format_context[0].streams[self.video_stream_index].codec
-
-  if avcodec.avcodec_open2(self.video_decoder_context, decoder[0], nil) < 0 then
-    error('Failed to open video decoder')
-  end
-
-  -- Release decoder context when collected by the GC
-  ffi.gc(self.video_decoder_context, avcodec.avcodec_close)
-
-  -- -- Print format info
-  -- avformat.av_dump_format(self.format_context[0], 0, path, 0)
-
-  return self
-end
-
---- A Video class.
--- @type Video
-
----- Sets a filter to apply to the video.
---
--- @string pixel_format_name The name of the desired output pixel format.
--- Pixel names can be found in
--- [pixdesc.c](https://www.ffmpeg.org/doxygen/1.1/pixdesc_8c_source.html).
--- @string[opt='null'] filterchain The filterchain to be applied. Refer to the
--- [libav documentation](https://libav.org/documentation/avfilter.html)
--- for the syntax of this string.
--- @treturn Video A copy of this `Video` with the specified filter set
--- up.
---
--- @usage
--- -- Set up a filter which scales the video to 128x128 pixels, flips it
--- -- horizontally and sets the output pixel format to 24-bit RGB:
--- video = video:filter('rgb24', 'scale=128x128,hflip')
-function Video:filter(pixel_format_name, filterchain)
-  assert(not self.is_filtered)
-
-  local video = copy_object(self)
-
-  filterchain = filterchain or 'null'
-  local buffersrc = avfilter.avfilter_get_by_name('buffer');
-  local buffersink = avfilter.avfilter_get_by_name('buffersink');
-  local outputs = ffi.new('AVFilterInOut*[1]', avfilter.avfilter_inout_alloc());
-  ffi.gc(outputs, avfilter.avfilter_inout_free)
-  local inputs = ffi.new('AVFilterInOut*[1]', avfilter.avfilter_inout_alloc());
-  ffi.gc(inputs, avfilter.avfilter_inout_free)
-
-  local filter_graph = ffi.new('AVFilterGraph*[1]', avfilter.avfilter_graph_alloc());
-  ffi.gc(filter_graph, avfilter.avfilter_graph_free)
-
-  local args = string.format(
-    'video_size=%dx%d:pix_fmt=%d:time_base=%d/%d:pixel_aspect=%d/%d',
-    video.video_decoder_context.width,
-    video.video_decoder_context.height,
-    tonumber(video.video_decoder_context.pix_fmt),
-    video.video_decoder_context.time_base.num,
-    video.video_decoder_context.time_base.den,
-    video.video_decoder_context.sample_aspect_ratio.num,
-    video.video_decoder_context.sample_aspect_ratio.den)
-
-  local buffersrc_context = ffi.new('AVFilterContext*[1]');
-  if avfilter.avfilter_graph_create_filter(
-    buffersrc_context, buffersrc, 'in', args, nil, filter_graph[0]) < 0
-  then
-    error('Failed to create buffer source')
-  end
-
-  local buffersink_context = ffi.new('AVFilterContext*[1]');
-  if avfilter.avfilter_graph_create_filter(
-    buffersink_context, buffersink, 'out', nil, nil, filter_graph[0]) < 0
-  then
-    error('Failed to create buffer sink')
-  end
-
-  local pix_fmt = avutil.av_get_pix_fmt(pixel_format_name)
-  if pix_fmt == avutil.AV_PIX_FMT_NONE then
-    error('Invalid pixel format name: ' .. pixel_format_name)
-  end
-  local pix_fmts = ffi.new('enum AVPixelFormat[1]', {pix_fmt})
-  if avutil.av_opt_set_bin(buffersink_context[0],
-    'pix_fmts', ffi.cast('const unsigned char*', pix_fmts),
-    1 * ffi.sizeof('enum AVPixelFormat'), M.AV_OPT_SEARCH_CHILDREN) < 0
-  then
-    error('Failed to set output pixel format')
-  end
-
-  outputs[0].name       = avutil.av_strdup('in');
-  outputs[0].filter_ctx = buffersrc_context[0];
-  outputs[0].pad_idx    = 0;
-  outputs[0].next       = nil;
-  inputs[0].name        = avutil.av_strdup('out');
-  inputs[0].filter_ctx  = buffersink_context[0];
-  inputs[0].pad_idx     = 0;
-  inputs[0].next        = nil;
-
-  if avfilter.avfilter_graph_parse_ptr(filter_graph[0], filterchain,
-    inputs, outputs, nil) < 0
-  then
-    error('avfilter_graph_parse_ptr failed')
-  end
-
-  if avfilter.avfilter_graph_config(filter_graph[0], nil) < 0 then
-    error('avfilter_graph_config failed')
-  end
-
-  video.filter_graph = filter_graph
-  video.buffersrc_context = buffersrc_context
-  video.buffersink_context = buffersink_context
-  video.is_filtered = true
-
-  return video
-end
-
----- Gets the video duration in seconds.
-function Video:duration()
-  return tonumber(self.format_context[0].duration) / 1000000.0
-end
-
----- Gets the name of the video pixel format.
-function Video:pixel_format_name()
-  return ffi.string(avutil.av_get_pix_fmt_name(self.video_decoder_context.pix_fmt))
-end
-
----- Reads the next video frame.
--- @treturn VideoFrame
-function Video:read_video_frame()
-  self.frame_reader = self.frame_reader or create_frame_reader(self)
-
-  while true do
-    if coroutine.status(self.frame_reader) == 'dead' then
-      error('End of stream')
-    end
-
-    local ok, frame, frame_type = coroutine.resume(self.frame_reader)
-
-    if not ok then
-      error(frame)
-    end
-
-    if frame_type == 'video' then
-      return new_video_frame(frame)
-    end
-  end
-end
-
-function Video:each_frame(video_callback, audio_callback)
-  if audio_callback ~= nil then
-    error('Audio frames not supported yet')
-  end
-
-  local running = true
-  while running do
-    local ok, res = pcall(self.read_video_frame, self)
-    if ok then
-      video_callback(res)
-    else
-      running = false
-    end
-  end
-end
-
---- A VideoFrame class.
--- @type VideoFrame
-
----- Converts the video frame to an ASCII visualisation.
-function VideoFrame:to_ascii()
-  local frame = self.ffi_frame
-  if frame.format ~= avutil.AV_PIX_FMT_GRAY8 then
-    error(string.format(
-      'Unexpected pixel format "%s", frame_to_ascii requires "%s"',
-      ffi.string(avutil.av_get_pix_fmt_name(frame.format)),
-      ffi.string(avutil.av_get_pix_fmt_name(avutil.AV_PIX_FMT_GRAY8))))
-  end
-
-  local ascii = {}
-
-  for y = 0, (frame.height - 1) do
-    for x = 0, (frame.width - 1) do
-      local luma = frame.data[0][y * frame.linesize[0] + x]
-      if luma > 200 then
-        table.insert(ascii, '#')
-      elseif luma > 150 then
-        table.insert(ascii, '+')
-      elseif luma > 100 then
-        table.insert(ascii, '-')
-      elseif luma > 50 then
-        table.insert(ascii, '.')
-      else
-        table.insert(ascii, ' ')
-      end
-    end
-    table.insert(ascii, '\n')
-  end
-
-  return table.concat(ascii, '')
-end
-
-M.Video = Video
-M.VideoFrame = VideoFrame
+file:close()
+ffi.C._chdir(cwd)
+--------------------------------------------------------------------------------
+M.avutil.av_log_set_flags(M.AV_LOG_SKIP_REPEATED)
+M.avutil.av_log_set_level(M.AV_LOG_ERROR)
+M.avcodec.avcodec_register_all()
+M.avdevice.avdevice_register_all()
+M.avfilter.avfilter_register_all()
+M.avformat.av_register_all()
+M.avformat.avformat_network_init()
+--------------------------------------------------------------------------------
 local function sym(lib, func) return lib[func] end
 M.assert = function (err, prefix)
     if err == 0 or err == true then return end
@@ -511,24 +174,24 @@ M.assert = function (err, prefix)
     end
     if err >= 0 then return end
     local errbuf = ffi.new('char[?]', 1024)
-    if avutil.av_strerror(err, errbuf, 1024) < 0 then errbuf = ffi.C.strerror(err) end
-    avutil.av_log(nil, M.AV_LOG_FATAL, "%s: %s\n", prefix, errbuf)
+    if M.av_strerror(err, errbuf, 1024) < 0 then errbuf = ffi.C.strerror(err) end
+    M.av_log(nil, M.AV_LOG_FATAL, "%s: %s\n", prefix, errbuf)
     if err == M.AVERROR_EXIT then os.exit(0) end
     error(ffi.string(errbuf), 2)
 end
 M.error= function (...)
     local idx, avcl = 1
     if type(select(1, ...)) ~= 'string' then avcl,idx = select(1, ...), 2 end
-    avutil.av_log(avcl, M.AV_LOG_FATAL, string.format(select(idx, ...)))
+    M.av_log(avcl, M.AV_LOG_FATAL, string.format(select(idx, ...)))
     error('', 2)
 end
 local function cache(v, e)
-    local v,f= pcall(sym, avutil, e)
-    if not v then v,f = pcall(sym, avcodec, e) end
-    if not v then v,f = pcall(sym, avformat, e) end
-    if not v then v,f = pcall(sym, avdevice, e) end
-    if not v then v,f = pcall(sym, avfilter, e) end
-    if not v then v,f = pcall(sym, swscale, e) end
+    local v,f= pcall(sym, M.avutil, e)
+    if not v then v,f = pcall(sym, M.avcodec, e) end
+    if not v then v,f = pcall(sym, M.avformat, e) end
+    if not v then v,f = pcall(sym, M.avdevice, e) end
+    if not v then v,f = pcall(sym, M.avfilter, e) end
+    if not v then v,f = pcall(sym, M.swscale, e) end
     if not v then return v, f end
 --[[
     v = string.match(tostring(f), '<(.-)%b()>')--function return type

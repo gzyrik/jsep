@@ -1,7 +1,15 @@
-local ffi, bit = require'ffi', require'bit'
-local _OPT, ret = loadfile('ff-opt.lua')
+local function local_dir()
+    local f=debug.getinfo(2, 'S').source:sub(2)
+    local file = io.popen('dir /B /S ' .. f)
+    f = file:read('*all')
+    file:close()
+    return string.match(f,'^(.*)ff%.lua')
+end
+local cwd = local_dir()
+--------------------------------------------------------------------------------
+local _OPT, ret = loadfile(cwd..'ff-opt.lua')
 assert(_OPT, ret)
-local ret, FFmpeg, _OPT, _URL = pcall(_OPT, arg)
+local ret, FFmpeg, _OPT, _URL = pcall(_OPT, cwd, arg)
 assert(ret, FFmpeg)
 --_OPT表: Hash部分为全局参数, Array部分为输出文件`FILE表'
 --_URL表: Array部分为输入文件`FILE表'
@@ -21,6 +29,7 @@ assert(ret, FFmpeg)
 --      }
 local url, fmtctx = _OPT.url, _OPT.fmtctx
 --------------------------------------------------------------------------------
+local ffi, bit = require'ffi', require'bit'
 local function open_stream(uid, sid, info)
     local ifile = _URL[uid]
     local name = url(ifile)
@@ -287,7 +296,7 @@ local function transcode_step(ofile)
     end
 end
 --------------------------------------------------------------------------------
-local _TTY, ret = loadfile('ff-tty.lua')
+local _TTY, ret = loadfile(cwd..'ff-tty.lua')
 assert(_TTY, ret)
 ret, _TTY = pcall(_TTY, FFmpeg, _OPT)
 assert(ret, _TTY)

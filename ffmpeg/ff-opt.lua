@@ -1,5 +1,7 @@
+local CWD, ARG =...
+--------------------------------------------------------------------------------
 local inputs, opt ={},{}
-local global={
+local global={'sdk','cdef',
     'y','n','hide_banner', 'v',
     'protocols', 'filters', 'pix_fmts',
     'codecs', 'decoders', 'encoders',
@@ -17,14 +19,13 @@ local function perfile(ret, x)
 end
 local function url(file) return file and file[-1] end
 --------------------------------------------------------------------------------
-local arg=...
-local ret = dofile('getopt.lua')(arg, 'c,s,m,filter',{
+local ret = dofile(CWD..'getopt.lua')(ARG, 'c,s,m,filter',{
     help='h', map='m', codec='c',
     acodec='c:a', vcodec='c:v',
     vf='filter:v', af='filter:a',
 
     h=function(ret, i, x)
-        opt.h = x or arg[i+1] or true
+        opt.h = x or ARG[i+1] or true
         return ret
     end,
     i=function(ret, i, x)
@@ -42,17 +43,35 @@ if not next(opt) and #inputs == 0 then opt.h = 'demo' end
 --------------------------------------------------------------------------------
 if opt.h then 
     if type(opt.h) ~= 'string' or not string.match(opt.h, '(%w+)=(%w+)') then
-        local man, ret = loadfile('ff-man.lua')
+        local man, ret = loadfile(CWD..'ff-man.lua')
         assert(man, ret)
         man(opt.h)
         os.exit(0)
     end
 end
+-- read cached sdk list from sdk.txt
+local sdk_list={}
+for line in io.lines(CWD..'sdk.txt') do 
+    local file = io.popen('dir /B '..line..'bin\\*.dll 2>NUL')
+    if string.len(file:read('*all')) > 0 then table.insert(sdk_list, line) end
+    file:close()
+end
+if not opt.sdk then opt.sdk, sdk_list = sdk_list[1] end
+local SEP = string.sub(package.config, 1, 1)
+if string.sub(opt.sdk, -1) ~= SEP then opt.sdk = opt.sdk .. SEP end
+if not opt.cdef then opt.cdef = CWD .. string.match(opt.sdk, '[_-](%d*%.%d*)')..'.cdef' end
 --------------------------------------------------------------------------------
-local FFmpeg, ret = loadfile('init.lua')
+local FFmpeg, ret = loadfile(CWD..'init.lua')
 assert(FFmpeg, ret)
-FFmpeg = FFmpeg(opt.sdk or 'Z:/develop/ffmpeg-3.4.2-win64')
-local cmd, ret = loadfile('ff-cmd.lua')
+FFmpeg = FFmpeg(opt.sdk, opt.cdef)
+if sdk_list then -- insert sdk to sdk.txt
+    table.insert(sdk_list, 1, opt.sdk)
+    local file = io.open(CWD..'sdk.txt', 'w')
+    print(table.concat(sdk_list, '\n'))
+    file:write(table.concat(sdk_list, '\n'))
+    file:close()
+end
+local cmd, ret = loadfile(CWD..'ff-cmd.lua')
 assert(cmd, ret)
 cmd, ret = pcall(cmd, FFmpeg, opt)
 assert(cmd, ret)
