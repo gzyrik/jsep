@@ -1,4 +1,12 @@
 local description={
+    sdk=[[
+-sdk dir
+    Set FFmpeg SDK directory.
+]],
+    cdef=[[
+-cdef file
+    Set luajit ctype file
+]],
     v=[[
 -v [flags+]loglevel
     Set logging level and flags used by the library.
@@ -139,6 +147,8 @@ Print help / information / capabilities:
 ]]}
 local global_options={[[
 Global options affect whole program instead of just one file:
+    -sdk                FFmpeg SDK directory
+    -cdef               FFmpeg luajit cdef file
     -v [flags+]loglevel set logging level
     -y                  overwrite output files
     -n                  never overwrite output files
@@ -207,12 +217,12 @@ local options = {
     subtitle=subtitle_options,
 }
 local demo=[[
+-list_devices 1 -f avfoundation -i dummy -f sdl
 -f lavfi -i mandelbrot -f sdl
 -f lavfi -i testsrc -f sdl
--f lavfi -i testsrc \
-   -vf split[a][b];[a]pad=2*iw[1];[b]hflip[2];[1][2]overlay=w \
-   -f sdl -pix_fmt=rgb24
+-f lavfi -i testsrc -vf split[a][b];[a]pad=2*iw[1];[b]hflip[2];[1][2]overlay=w -f sdl -pix_fmt=rgb24
 -f dshow -i "video=FaceTime HD Camera" -f sdl -c:v rawvideo -pix_fmt yuv420p
+-f avfoundation -framerate 30 -i 0 -f sdl -pix_fmt yuv420p
 -i centaur_1.mpg -f sdl -c:v rawvideo --pix_fmt=yuv420p
 -i centaur_1.mpg -f sdl --vcodec=rawvideo --pix_fmt=yuv420p -s:v 640x480
 -i centaur_1.mpg -c:v libx264 out.mp4
@@ -231,7 +241,7 @@ if type(h) == 'string' then
         elseif h == 'demo' then
             io.write(demo)
         else
-            io.write('Invalid category: ', h)
+            io.write('Invalid category: ', h, '\n')
             os.exit(-1)
         end
     else
@@ -239,7 +249,7 @@ if type(h) == 'string' then
         if opt then
             io.write(opt,'\n')
         else
-            io.write('Invalid option: ', h)
+            io.write('Invalid option: ', h, '\n')
             os.exit(-1)
         end
     end

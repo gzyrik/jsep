@@ -45,6 +45,8 @@ if jit.os == 'Windows' then
     read_key = function()
         if ffi.C._kbhit() ~= 0 then return string.char(ffi.C._getch()) end
     end
+else
+    read_key = function() return nil end
 end
 FFmpeg.av_log(nil, FFmpeg.AV_LOG_INFO, "Press [q] to stop, [?] for help\n")
 local last_time = 0

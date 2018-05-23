@@ -1,8 +1,13 @@
+local SEP = string.sub(package.config, 1, 1)
 local function local_dir()
     local f=debug.getinfo(2, 'S').source:sub(2)
-    local file = io.popen('dir /B /S ' .. f)
-    f = file:read('*all')
-    file:close()
+    if SEP == '\\' then
+        local file = io.popen('dir /B /S '..f)
+        f = file:read('*all')
+        file:close()
+    else
+        f = os.getenv('PWD')..SEP..f
+    end
     return string.match(f,'^(.*)ff%.lua')
 end
 local cwd = local_dir()
@@ -136,7 +141,7 @@ local function add_stream(ofile, uid, sid, info)
         swsctx = FFmpeg.sws_getCachedContext(nil, iw, ih,ifmt,
         opar.width, opar.height, opar.format,
         FFmpeg.SWS_BICUBIC, nil, nil, nil)
-        FFmpeg.av_log(fmtctx(ofile), FFmpeg.AV_LOG_WARNING, string.format('swsctx %s:%dx%d->%s:%dx%d',
+        FFmpeg.av_log(fmtctx(ofile), FFmpeg.AV_LOG_WARNING, string.format('swsctx %s:%dx%d->%s:%dx%d\n',
         ffi.string(FFmpeg.av_get_pix_fmt_name(ifmt)), iw, ih,
         ffi.string(FFmpeg.av_get_pix_fmt_name(opar.format)), opar.width, opar.height))
         sws_frame = ffi.new('AVFrame*[1]', FFmpeg.av_frame_alloc())

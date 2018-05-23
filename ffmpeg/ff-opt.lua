@@ -49,21 +49,33 @@ if opt.h then
         os.exit(0)
     end
 end
+local SEP = string.sub(package.config, 1, 1)
 -- read cached sdk list from sdk.txt
 local sdk_list={}
 for line in io.lines(CWD..'sdk.txt') do 
-    local file = io.popen('dir /B '..line..'bin\\*.dll 2>NUL')
-    if string.len(file:read('*all')) > 0 then table.insert(sdk_list, line) end
+    local file
+    local suffix = string.match(package.cpath, '.*(%..*)')
+    if SEP == '\\' then
+        line = string.gsub(line, '/', SEP)
+        file = io.popen('dir /B '..line..'bin\\*.dll 2>NUL')
+    else
+        file = io.popen('ls '..line..'bin/*'..suffix)
+    end
+    if string.match(file:read('*all'), '.*%'..suffix) then
+        table.insert(sdk_list, 1, line)
+    else
+        table.insert(sdk_list, line)
+    end
     file:close()
 end
 if not opt.sdk then opt.sdk, sdk_list = sdk_list[1] end
-local SEP = string.sub(package.config, 1, 1)
+assert(opt.sdk, "\nUse -sdk to set ffmpeg sdk dir, run '-h -sdk' for help")
 if string.sub(opt.sdk, -1) ~= SEP then opt.sdk = opt.sdk .. SEP end
 if not opt.cdef then opt.cdef = CWD .. string.match(opt.sdk, '[_-](%d*%.%d*)')..'.cdef' end
 --------------------------------------------------------------------------------
 local FFmpeg, ret = loadfile(CWD..'init.lua')
 assert(FFmpeg, ret)
-FFmpeg = FFmpeg(opt.sdk, opt.cdef)
+FFmpeg = FFmpeg(opt.sdk, opt.cdef, CWD)
 if sdk_list then -- insert sdk to sdk.txt
     table.insert(sdk_list, 1, opt.sdk)
     local file = io.open(CWD..'sdk.txt', 'w')
@@ -87,7 +99,7 @@ local function prepare(files, input)
         end
         if file.f and input then
             local fmt = FFmpeg.av_find_input_format(file.f)
-            FFmpeg.assert(fmt, file.f)
+            FFmpeg.assert(fmt, "Unknown input format: '%s'\n", file.f)
             file.f = fmt
         end
         if file.c then
@@ -296,7 +308,7 @@ local guess_map = function (ofile)
         if sidx then
             local val = uidx..':'..sidx
             FFmpeg.av_log(fmtctx(ofile), FFmpeg.AV_LOG_WARNING,
-            "Guess video map '%s' of '%s' from '%s'\n", val, url(ofile), url(inputs[uidx+1]))
+            "Guess video map '%s' from '%s'\n", val, url(inputs[uidx+1]))
             table.insert(m, val)
         end
     end

@@ -13,7 +13,7 @@ local function show_banner()
         a = FFmpeg[b..'_version']
         if a then
             a = a()
-            a = string.format("%slib%-11s %2d.%3d.%3d\n", indent, b,
+            a = string.format("%s%-11s %2d.%3d.%3d\n", indent, b,
             bit.rshift(a,16), bit.rshift(bit.band(a,0x00FF00),8), bit.band(a,0xFF))
             FFmpeg.av_log(nil, FFmpeg.AV_LOG_INFO, a)
         end
