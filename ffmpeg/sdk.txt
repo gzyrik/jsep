@@ -1,1 +1,2 @@
+../../ffmpeg-4.0-win64/
 ../ffmpeg-4.0-win64/

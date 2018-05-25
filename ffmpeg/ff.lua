@@ -37,8 +37,9 @@ local url, fmtctx = _OPT.url, _OPT.fmtctx
 local ffi, bit = require'ffi', require'bit'
 local function open_stream(uid, sid, info)
     local ifile = _URL[uid]
-    local name = url(ifile)
-    local ist = fmtctx(ifile).streams[sid-1]
+    local name, ctx = url(ifile),fmtctx(ifile)
+    assert(sid <= ctx.nb_streams)
+    local ist = ctx.streams[sid-1]
     assert(ist.index+1 == sid, name)
     if ifile[sid] then return ist end
 
@@ -183,8 +184,8 @@ local function open_ofile(ofile)
     local name = url(ofile)
     local ctx = fmtctx(ofile, true)
     ofile.m = _OPT.stream_map(ofile)
-    for uid, st in ipairs(ofile.m) do
-        for sid, info in ipairs(st) do add_stream(ofile, uid, sid, info) end
+    for uid, st in pairs(ofile.m) do
+        for sid, info in pairs(st) do add_stream(ofile, uid, sid, info) end
     end
     FFmpeg.av_dump_format(ctx, 0, name, 1)
 

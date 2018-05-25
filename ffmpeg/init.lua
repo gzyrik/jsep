@@ -182,15 +182,19 @@ else
 end
 --------------------------------------------------------------------------------
 local function sym(lib, func) return lib[func] end
-M.assert = function (err, ...)
+M.assert = function (err, prefix, ...)
     if err == 0 or err == true then return end
     if type(err) ~= 'number' then
         if err ~= nil then return end
-        M.av_log(nil, M.AV_LOG_FATAL, string.format(...))
+        if type(prefix) ~= 'string' then prefix = '(nil)'
+        else prefix = string.format(prefix, ...) end
+        M.av_log(nil, M.AV_LOG_FATAL, prefix)
     elseif err < 0 then
         local errbuf = ffi.new('char[?]', 1024)
         if M.av_strerror(err, errbuf, 1024) < 0 then errbuf = ffi.C.strerror(err) end
-        M.av_log(nil, M.AV_LOG_FATAL, "%s: %s\n", string.format(...), errbuf)
+        if type(prefix) ~= 'string' then prefix = '(nil)'
+        else prefix = string.format(prefix, ...) end
+        M.av_log(nil, M.AV_LOG_FATAL, "%s: %s\n", prefix, errbuf)
         if err == M.AVERROR_EXIT then os.exit(0) end
     else
         return

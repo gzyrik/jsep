@@ -79,8 +79,11 @@ FFmpeg = FFmpeg(opt.sdk, opt.cdef, CWD)
 if sdk_list then -- insert sdk to sdk.txt
     table.insert(sdk_list, 1, opt.sdk)
     local file = io.open(CWD..'sdk.txt', 'w')
-    print(table.concat(sdk_list, '\n'))
-    file:write(table.concat(sdk_list, '\n'))
+    for i, v in ipairs(sdk_list) do -- remove duplicate
+        if not sdk_list[v] then file:write(v, '\n') end
+        sdk_list[v] = i
+    end
+    sdk_list = nil
     file:close()
 end
 local cmd, ret = loadfile(CWD..'ff-cmd.lua')
@@ -158,13 +161,13 @@ local function fmtctx(file, output)
     end
     return file[0].fmtctx[0]
 end
-local function codec_dict (opts, codec_id, fmtcxt, stream, codec)
+local function codec_dict (opts, codec_id, ctx, stream, codec)
     local ret = ffi.new('AVDictionary*[1]')
     ffi.gc(ret, FFmpeg.av_dict_free)
     local cc = ffi.new('void*[1]', ffi.cast('void*', FFmpeg.avcodec_get_class()))
-    local flags = fmtcxt.oformat ~= nil and FFmpeg.AV_OPT_FLAG_ENCODING_PARAM or FFmpeg.AV_OPT_FLAG_DECODING_PARAM
+    local flags = ctx.oformat ~= nil and FFmpeg.AV_OPT_FLAG_ENCODING_PARAM or FFmpeg.AV_OPT_FLAG_DECODING_PARAM
     if not codec then
-        if fmtcxt.oformat ~= nil then
+        if ctx.oformat ~= nil then
             codec =  FFmpeg.avcodec_find_encoder(codec_id)
         else
             codec =  FFmpeg.avcodec_find_decoder(codec_id)
@@ -191,9 +194,9 @@ local function codec_dict (opts, codec_id, fmtcxt, stream, codec)
         -- check stream specification in opt name
         if p then
             local s = string.sub(k, p+1)
-            local ret = FFmpeg.avformat_match_stream_specifier(fmtcxt, stream, s);
+            local ret = FFmpeg.avformat_match_stream_specifier(ctx, stream, s);
             if ret < 0 then
-                FFmpeg.error(fmtcxt, "Invalid stream specifier: %s\n", s)
+                FFmpeg.error(ctx, "Invalid stream specifier: %s\n", s)
             elseif ret == 0 then
                 goto continue --skip
             else
@@ -204,11 +207,11 @@ local function codec_dict (opts, codec_id, fmtcxt, stream, codec)
             (priv_class and 
             nil ~= FFmpeg.av_opt_find(priv_class, k, nil, flags, FFmpeg.AV_OPT_SEARCH_FAKE_OBJ)) then
             FFmpeg.av_dict_set(ret, k, v, 0)
-            FFmpeg.av_log(fmtcxt, FFmpeg.AV_LOG_DEBUG, "codec opts: %s = %s\n", k, v);
+            FFmpeg.av_log(ctx, FFmpeg.AV_LOG_DEBUG, "codec opts: %s = %s\n", k, v);
         elseif string.sub(k, 1, 1) == prefix and
             nil ~= FFmpeg.av_opt_find(cc, string.sub(k, 2), nil, flags, FFmpeg.AV_OPT_SEARCH_FAKE_OBJ) then
             FFmpeg.av_dict_set(ret, string.sub(k, 2), v, 0)
-            FFmpeg.av_log(fmtcxt, FFmpeg.AV_LOG_DEBUG, "codec opts: %s = %s\n", string.sub(k, 2), v);
+            FFmpeg.av_log(ctx, FFmpeg.AV_LOG_DEBUG, "codec opts: %s = %s\n", string.sub(k, 2), v);
         end
         ::continue::
     end
@@ -227,12 +230,12 @@ local function for_stream(name, dft_spec)
     end
     local uid = uidx+1
     local ctx = fmtctx(inputs[uid])
-    return function(ctx, sid)
-        while sid < ctx.nb_streams do
-            if FFmpeg.avformat_match_stream_specifier(ctx, ctx.streams[sid], spec) > 0  then
-                return sid+1, uid, ctx.streams[sid]
+    return function(ctx, sidx)
+        while sidx < ctx.nb_streams do
+            if FFmpeg.avformat_match_stream_specifier(ctx, ctx.streams[sidx], spec) > 0  then
+                return sidx+1, uid, ctx.streams[sidx]
             end
-            sid = sid + 1
+            sidx = sidx + 1
         end
     end, ctx, 0
 end
@@ -250,16 +253,13 @@ local function parse_stream_map (map_desc, dft_spec, maps)
     p2 =  string.find(desc, '[', p1, true)
     if p2 then --'[label]' this mapping refers to lavfi output
         label = string.match(desc, "^(.*)%]$", p2+1)
-        if not label then
-            FFmpeg.av_log(nil, FFmpeg.AV_LOG_FATAL, "Invalid output link label: %s.\n", desc);
-            os.exit(-1)
-        end
+        if not label then FFmpeg.error("Invalid output link label: %s.\n", desc) end
         if not disabled then
             maps[label] = sync or true
         elseif maps[label] then
             maps[label] = nil
         end
-        print('*label', label, disabled)
+        --print('*label', label, disabled)
         desc, p1 = string.sub(desc, p1, p2-p1), 1
     end
     p2 =  string.find(desc, '?', p1, true)
@@ -273,18 +273,20 @@ local function parse_stream_map (map_desc, dft_spec, maps)
             if not maps[uid] then maps[uid] = {} end
             assert(not maps[uid][sid])
             maps[uid][sid] = sync or {uid, sid}
-            print('*map', uid, sid)
+            --print('*map', uid, sid)
         elseif ret[uid] and maps[uid][sid] then
             maps[uid][sid] = nil
-            print('*umap', uid, sid)
+            --print('*umap', uid, sid)
             if not next(maps[uid]) then maps[uid] = nil end
         end
     end
     if not label and not has_sid then
         if allow_unused or disabled then
-            FFmpeg.av_log(nil, FFmpeg.AV_LOG_VERBOSE, "Stream map '%s' matches no streams; ignoring.\n", map_desc)
+            FFmpeg.av_log(nil, FFmpeg.AV_LOG_VERBOSE,
+            "Stream map '%s' matches no streams; ignoring.\n", map_desc)
         else
-            FFmpeg.error("Stream map '%s' matches no streams.\nTo ignore this, add a trailing '?' to the map.\n", map_desc)
+            FFmpeg.error("Stream map '%s' matches no streams.\n"..
+            "To ignore this, add a trailing '?' to the map.\n", map_desc)
         end
     end
 end
@@ -317,16 +319,23 @@ end
 local function find_stream_by_filter(input, dft_spec, graph_desc)
     local mtype = FFmpeg.avfilter_pad_get_type(input.filter_ctx.input_pads, input.pad_idx)
     if  input.name ~= nil then
-        for sid, uid, st in for_stream(ffi.string(input.name)) do
+        local name = ffi.string(input.name)
+        for sid, uid, st in for_stream(name, dft_spec) do
             if st.codecpar.codec_type == mtype then return uid, sid end
         end
         FFmpeg.error("Stream specifier '%s' in filtergraph description %s "..
-        "matches no streams.\n", p, graph_desc)
+        "matches no streams.\n", name, graph_desc)
     else -- find the first unused stream of corresponding type
         for uid, ifile in ipairs(inputs) do
-            local ctx = fmtctx(ifile)
-            for i=#ifile, ctx.nb_streams-1 do
-                if ctx.streams[i].codecpar.codec_type == mtype then return uid, i+1 end
+            local ctx, off = fmtctx(ifile), #ifile
+            for i=0, ctx.nb_streams-1 do
+                local sidx = (i + off) % ctx.nb_streams
+                if ctx.streams[sidx].codecpar.codec_type == mtype and (type(dft_spec) ~= 'string' or
+                    FFmpeg.avformat_match_stream_specifier(ctx, ctx.streams[sidx], dft_spec) > 0) then
+                    FFmpeg.av_log(nil, FFmpeg.AV_LOG_WARNING,
+                    "Guess filter map '%s' from '%s'\n", (uid-1)..':'..sidx, url(ifile))
+                    return uid, sidx+1
+                end
             end
         end
         FFmpeg.error("Cannot find a matching stream for "..
@@ -369,11 +378,11 @@ local function parse_filter_map(graph_desc, dft_spec, maps)
     end
     local cur, i = inputs[0], 0
     while cur ~= nil do
-        local sid, uid = find_stream_by_filter(cur, dft_spec, graph_desc)
+        local uid, sid = find_stream_by_filter(cur, dft_spec, graph_desc)
         if not maps[uid] then maps[uid] = {} end
         assert(not maps[uid][sid])
         maps[uid][sid] = {filter={graph=graph, inputs=inputs, outputs=outputs}}
-        print('*graph', uid, sid)
+        --print('*graph', uid, sid)
         cur = cur.next
         i = i + i
     end
