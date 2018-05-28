@@ -18,10 +18,12 @@ local function perfile(ret, x)
     return ret
 end
 local function url(file) return file and file[-1] end
+local function mark_used(opts, k, v) opts[-2][k] = v or true end
 --------------------------------------------------------------------------------
 local ret = dofile(CWD..'getopt.lua')(ARG, 'c,s,m,filter',{
     help='h', map='m', codec='c',
-    acodec='c:a', vcodec='c:v',
+    acodec='c:a', vcodec='c:v', r='framerate',
+    ab='b:a', vb='b:v',
     vf='filter:v', af='filter:a',
 
     h=function(ret, i, x)
@@ -59,7 +61,7 @@ for line in io.lines(CWD..'sdk.txt') do
         line = string.gsub(line, '/', SEP)
         file = io.popen('dir /B '..line..'bin\\*.dll 2>NUL')
     else
-        file = io.popen('ls '..line..'bin/*'..suffix)
+        file = io.popen('ls '..line..'bin/*'..suffix..' 2>/dev/null')
     end
     if string.match(file:read('*all'), '.*%'..suffix) then
         table.insert(sdk_list, 1, line)
@@ -95,6 +97,28 @@ if #inputs ==0 then os.exit(0) end
 local ffi, bit = require'ffi', require'bit'
 local function prepare(files, input)
     for _, file in ipairs(files) do
+        file[-2] = {}
+        local name = url(file)
+        if not input and name and string.match(name, '^http://.*%.ffm$') then
+            local fmt = FFmpeg.av_find_input_format('ffm')
+            FFmpeg.assert(fmt, "Unable to find a suitable format for: '%s'\n", name)
+            local ctx = ffi.new('AVFormatContext*[1]')
+            ffi.gc(ctx, FFmpeg.avformat_close_input)
+            local ret = FFmpeg.avformat_open_input(ctx, name, fmt, nil)
+            FFmpeg.assert(ret, name)
+            -- read_ffserver_streams
+            for i=0, ctx[0].nb_streams-1 do
+                local ist = ctx[0].streams[i]
+                local ipar= ist.codecpar
+                local codec = FFmpeg.avcodec_find_encoder(ipar.codec_id)
+                FFmpeg.assert(codec, "no encoder found for codec id %i\n", ipar.codec_id)
+                if codec.type == FFmpeg.AVMEDIA_TYPE_AUDIO then
+                    file.c.a = ffi.string(codec.name)
+                elseif codec.type == FFmpeg.AVMEDIA_TYPE_VIDEO then
+                    file.c.v = ffi.string(codec.name)
+                end
+            end
+        end
         if file.pix_fmt then
             local pix_fmt = FFmpeg.av_get_pix_fmt(file.pix_fmt)
             assert(pix_fmt ~= FFmpeg.AV_PIX_FMT_NONE, file.pix_fmt)
@@ -126,14 +150,21 @@ local function format_dict(opts)
     local ret = ffi.new('AVDictionary*[1]')
     ffi.gc(ret, FFmpeg.av_dict_free)
     local cc = ffi.new('void*[1]', ffi.cast('void*', FFmpeg.avformat_get_class()))
+    local priv_class
+    if type(opts.f) == 'cdata' then 
+        priv_class = ffi.new('void*[1]', ffi.cast('void*', opts.f.priv_class))
+    end
     for k, v in pairs(opts) do
         if type(k) ~= 'string' or type(v) ~= 'string' then goto continue end
 
-        if nil ~= FFmpeg.av_opt_find(cc, k, nil, 0,
-            bit.bor(FFmpeg.AV_OPT_SEARCH_CHILDREN, FFmpeg.AV_OPT_SEARCH_FAKE_OBJ)) then
+        if nil ~= FFmpeg.av_opt_find(cc, k, nil, 0, bit.bor(FFmpeg.AV_OPT_SEARCH_CHILDREN, FFmpeg.AV_OPT_SEARCH_FAKE_OBJ))
+            or (priv_class and nil ~= FFmpeg.av_opt_find(priv_class, k, nil, 0, FFmpeg.AV_OPT_SEARCH_FAKE_OBJ)) then
             FFmpeg.av_dict_set(ret, k, v, 0)
-            FFmpeg.av_log(nil, FFmpeg.AV_LOG_DEBUG, "format opts: %s = %s\n", k, v);
+            FFmpeg.av_log(nil, FFmpeg.AV_LOG_WARNING, "format opts: %s = %s\n", k, v);
+        else
+            goto continue
         end
+        mark_used(opts,k)
         ::continue::
     end
     return ret
@@ -145,14 +176,16 @@ local function fmtctx(file, output)
 
     file[0] = { fmtctx = ctx }
     if output then
-        local ret = FFmpeg.avformat_alloc_output_context2(ctx, nil, file.f,  name)
+        local ret = FFmpeg.avformat_alloc_output_context2(ctx, nil, file.f, name)
         FFmpeg.assert(ret, name)
+        file.f = nil
     else
         for _, ofile in ipairs(opt) do
             if ofile == file then error('output file as input', 2) end
         end
         local ret = FFmpeg.avformat_open_input(ctx, name, file.f, format_dict(file))
         FFmpeg.assert(ret, name)
+        file.f = nil
 
         local ret = FFmpeg.avformat_find_stream_info(ctx[0], nil)
         FFmpeg.assert(ret, name)
@@ -161,9 +194,21 @@ local function fmtctx(file, output)
     end
     return file[0].fmtctx[0]
 end
+local function specifier(val, ctx, stream)
+    local t = type(val)
+    if t == 'table' then
+        for k, v in pairs(val) do
+            if FFmpeg.avformat_match_stream_specifier(ctx, stream, k) > 0 then
+                return v
+            end
+        end
+    elseif t == 'string' then
+        return val
+    end
+end
 local function codec_dict (opts, codec_id, ctx, stream, codec)
-    local ret = ffi.new('AVDictionary*[1]')
-    ffi.gc(ret, FFmpeg.av_dict_free)
+    local dict = ffi.new('AVDictionary*[1]')
+    ffi.gc(dict, FFmpeg.av_dict_free)
     local cc = ffi.new('void*[1]', ffi.cast('void*', FFmpeg.avcodec_get_class()))
     local flags = ctx.oformat ~= nil and FFmpeg.AV_OPT_FLAG_ENCODING_PARAM or FFmpeg.AV_OPT_FLAG_DECODING_PARAM
     if not codec then
@@ -189,51 +234,48 @@ local function codec_dict (opts, codec_id, ctx, stream, codec)
         flags  = bit.bor(flags, FFmpeg.AV_OPT_FLAG_SUBTITLE_PARAM)
     end
     for k, v in pairs(opts) do
-        if type(k) ~= 'string' or type(v) ~= 'string' then goto continue end
-        local p = string.find(k, ':', 1, true)
+        if type(k) ~= 'string' then goto continue end
+        v = specifier(v, ctr, stream)
+        if not v then goto continue end
+
+        local k0, p = k, string.find(k, ':', 1, true)
         -- check stream specification in opt name
         if p then
             local s = string.sub(k, p+1)
             local ret = FFmpeg.avformat_match_stream_specifier(ctx, stream, s);
-            if ret < 0 then
-                FFmpeg.error(ctx, "Invalid stream specifier: %s\n", s)
-            elseif ret == 0 then
-                goto continue --skip
-            else
-                k = string.sub(k, 1, p-1)
+            if ret < 0 then FFmpeg.error(ctx, "Invalid stream specifier: %s\n", s)
+            elseif ret == 0 then goto continue --skip
+            else k = string.sub(k, 1, p-1)
             end
         end
         if nil ~= FFmpeg.av_opt_find(cc, k, nil, flags, FFmpeg.AV_OPT_SEARCH_FAKE_OBJ) or
             (priv_class and 
             nil ~= FFmpeg.av_opt_find(priv_class, k, nil, flags, FFmpeg.AV_OPT_SEARCH_FAKE_OBJ)) then
-            FFmpeg.av_dict_set(ret, k, v, 0)
-            FFmpeg.av_log(ctx, FFmpeg.AV_LOG_DEBUG, "codec opts: %s = %s\n", k, v);
+            FFmpeg.av_dict_set(dict, k, v, 0)
+            FFmpeg.av_log(ctx, FFmpeg.AV_LOG_WARNING, "codec opts: %s = %s\n", k, v)
         elseif string.sub(k, 1, 1) == prefix and
             nil ~= FFmpeg.av_opt_find(cc, string.sub(k, 2), nil, flags, FFmpeg.AV_OPT_SEARCH_FAKE_OBJ) then
-            FFmpeg.av_dict_set(ret, string.sub(k, 2), v, 0)
-            FFmpeg.av_log(ctx, FFmpeg.AV_LOG_DEBUG, "codec opts: %s = %s\n", string.sub(k, 2), v);
+            FFmpeg.av_dict_set(dict, string.sub(k, 2), v, 0)
+            FFmpeg.av_log(ctx, FFmpeg.AV_LOG_WARNING, "codec opts: %s = %s\n", string.sub(k, 2), v)
+        else
+            goto continue
         end
+        mark_used(opts,k0)
         ::continue::
     end
-    return ret
+    return dict
 end
-local function for_stream(name, dft_spec)
-    local uidx, spec = string.match(name, '^(%d*)(.*)$')
+--for sid, uid, st in for_stream('1:v') do ... end
+local function for_stream(specifier, dft_spec)
+    local uidx, spec = string.match(specifier, '^(%d*)%p*(.*)$')
     uidx = tonumber(uidx)
-    if uidx >= #inputs or uidx < 0 then
-        FFmpeg.error("Invalid input file index: %d.\n", uidx)
-    end
-    if #spec == 0 then
-        if type(dft_spec) == 'string' then spec = dft_spec end
-    elseif string.byte(spec, 1) == 58 then -- ':'
-        spec = string.sub(spec, 2)
-    end
-    local uid = uidx+1
-    local ctx = fmtctx(inputs[uid])
+    if uidx >= #inputs or uidx < 0 then FFmpeg.error("Invalid input file index: %d.\n", uidx) end
+    if #spec == 0 and type(dft_spec) == 'string' then spec = dft_spec  end
+    local ctx = fmtctx(inputs[uidx+1])
     return function(ctx, sidx)
         while sidx < ctx.nb_streams do
             if FFmpeg.avformat_match_stream_specifier(ctx, ctx.streams[sidx], spec) > 0  then
-                return sidx+1, uid, ctx.streams[sidx]
+                return sidx+1, uidx+1, ctx.streams[sidx]
             end
             sidx = sidx + 1
         end
@@ -291,11 +333,19 @@ local function parse_stream_map (map_desc, dft_spec, maps)
     end
 end
 local guess_map = function (ofile)
-    local m = {}
-    if not ofile.vn then
-        ofile.vn = FFmpeg.av_guess_codec(fmtctx(ofile).oformat, nil, url(ofile), nil, FFmpeg.AVMEDIA_TYPE_VIDEO) == FFmpeg.AV_CODEC_ID_NONE
+    local m, name = {}, url(ofile)
+    local vn,an = ofile.vn, ofile.an
+    if vn == nil then
+        vn = FFmpeg.av_guess_codec(fmtctx(ofile).oformat, nil, name, nil, FFmpeg.AVMEDIA_TYPE_VIDEO) == FFmpeg.AV_CODEC_ID_NONE
+    else
+        mark_used(ofile, 'vn')
     end
-    if not ofile.vn then
+    if an == nil then
+        an = FFmpeg.av_guess_codec(fmtctx(ofile).oformat, nil, name, nil, FFmpeg.AVMEDIA_TYPE_AUDIO) == FFmpeg.AV_CODEC_ID_NONE
+    else
+        mark_used(ofile, 'an')
+    end
+    if not vn then
         local best_area, uidx, sidx=0
         for i, ifile in ipairs(inputs) do -- find best video: highest resolution
             local sindex = FFmpeg.av_find_best_stream(fmtctx(ifile), FFmpeg.AVMEDIA_TYPE_VIDEO, -1, -1, nil, 0);
@@ -391,12 +441,13 @@ local function stream_map (ofile)
     local maps={}
     if ofile.m then
         for k, v in pairs(ofile.m) do parse_stream_map(v, k, maps) end
+        mark_used(ofile,'m')
     end
     if ofile.filter then
         for k, v in pairs(ofile.filter) do parse_filter_map(v, k, maps) end
+        mark_used(ofile, 'filter')
     elseif not next(maps) then
-        ofile.m = guess_map(ofile)
-        for k, v in pairs(ofile.m) do parse_stream_map(v, k, maps) end
+        for k, v in pairs(guess_map(ofile)) do parse_stream_map(v, k, maps) end
     end
     return maps
 end
@@ -422,10 +473,20 @@ local function choose_pix_fmt(codec, target)
     end
     return target
 end
+local function check_unknown(opts)
+    for k, v in pairs(opts) do
+        if type(k) == 'string' and not opts[-2][k] then
+            FFmpeg.av_log(nil, FFmpeg.AV_LOG_ERROR, "unknown option: %s\n", k);
+        end
+    end
+end
 --------------------------------------------------------------------------------
 opt.url = url
 opt.fmtctx = fmtctx
 opt.stream_map = stream_map
 opt.codec_dict = codec_dict
 opt.choose_pix_fmt = choose_pix_fmt
+opt.check_arg = check_unknown
+opt.mark_used = mark_used
+opt.specifier = specifier
 return FFmpeg, opt, inputs

@@ -40,17 +40,15 @@ local function _getopt(arg, options, repl, start)
         else
             x = nil
         end
-        if #k > 1 then
-            local y = string.find(k, ':', 1, true)
-            if repl and not y and type(repl[k]) == 'string' then
-                k = repl[k]
-                y = string.find(k, ':', 1, true)
-            end
-            if y and y > 1 and y < #k then
-                local s, y = string.sub(k, 1, y-1), string.sub(k, y+1)
-                if repl and #s > 1 and type(repl[s]) == 'string' then s = repl[s] end
-                if mul[s] then return setarg(s, x, y) end
-            end
+        local y = string.find(k, ':', 1, true)
+        if repl and not y and type(repl[k]) == 'string' then
+            k = repl[k]
+            y = string.find(k, ':', 1, true)
+        end
+        if y and y > 1 and y < #k then
+            local s, y = string.sub(k, 1, y-1), string.sub(k, y+1)
+            if repl and #s > 1 and type(repl[s]) == 'string' then s = repl[s] end
+            if mul[s] then return setarg(s, x, y) end
         end
         return setarg(k, x)
     end

@@ -19,6 +19,7 @@ assert(ret, FFmpeg)
 --_OPT表: Hash部分为全局参数, Array部分为输出文件`FILE表'
 --_URL表: Array部分为输入文件`FILE表'
 --`FILE表': Hash部分为参数集合
+--      [-2] 为有效命令参数集合, 使用 mark_used 标记为已使用
 --      [-1] 为url
 --      [0] 为该文件`运行态资源'{
 --          fmtctx=AVFormatContext*[1],
@@ -85,18 +86,26 @@ local function open_stream(uid, sid, info)
     return ist
 end
 local function add_stream(ofile, uid, sid, info)
+    local ctx = fmtctx(ofile)
     local ist = open_stream(uid, sid, info)
     local ipar = ist.codecpar
-    local ost = FFmpeg.avformat_new_stream(fmtctx(ofile), nil)
+    local ost = FFmpeg.avformat_new_stream(ctx, nil)
     local opar = ost.codecpar
     --fill default parameter
     ost.time_base.num, ost.time_base.den = ist.time_base.num, ist.time_base.den
-    opar.codec_type = ipar.codec_type
-    opar.format = ipar.format
-    opar.codec_id = ipar.codec_id
+    opar.codec_type, opar.codec_id, opar.format = ipar.codec_type, ipar.codec_id, ipar.format
     opar.width, opar.height = ipar.width, ipar.height
+    if ctx.oformat ~= nil then
+        if opar.codec_type == FFmpeg.AVMEDIA_TYPE_VIDEO then
+            opar.codec_id = ctx.oformat.video_codec
+        elseif opar.codec_type == FFmpeg.AVMEDIA_TYPE_AUDIO then
+            opar.codec_id = ctx.oformat.audio_codec
+        elseif opar.codec_type == FFmpeg.AVMEDIA_TYPE_SUBTITLE then
+            opar.codec_id = ctx.oformat.subtitle_codec
+        end
+    end
     local ifmt, iw, ih = opar.format, opar.width, opar.height
-    
+    --add filter
     local fltctx,flt_frame
     if info.filter then
         fltctx = ffi.new('AVFilterContext*[1]') -- free by graph
@@ -125,24 +134,32 @@ local function add_stream(ofile, uid, sid, info)
         ifmt, iw, ih = opar.format, opar.width, opar.height
     end
     -- override parameter
-    if ofile.c and ofile.c.v then opar.codec_id = ofile.c.v end
+    local vcodec = _OPT.specifier(ofile.c, ctx, ost)
+    if vcodec then
+        _OPT.mark_used(ofile, 'c', vcodec)
+        opar.codec_id = vcodec
+    end
     local codec = FFmpeg.avcodec_find_encoder(opar.codec_id)
     if ofile.pix_fmt then
         opar.format = ofile.pix_fmt
-    elseif codec.pix_fmts ~= nil then
+        _OPT.mark_used(ofile, 'pix_fmt')
+    end
+    if codec.pix_fmts ~= nil then
         opar.format = _OPT.choose_pix_fmt(codec, opar.format)
     end
-    if ofile.s and ofile.s.v then
-        local w, h = string.match(ofile.s.v, '^(%d*)x(%d*)$')
-        assert(w and h, ofile.s.v)
+    local vsize = _OPT.specifier(ofile.s, ctx, ost)
+    if vsize then
+        _OPT.mark_used(ofile, 's', vsize)
+        local w, h = string.match(vsize, '^(%d*)x(%d*)$')
+        assert(w and h, vsize)
         opar.width, opar.height = tonumber(w), tonumber(h)
     end
     local swsctx, sws_frame
-    if ifmt ~= opar.format or iw ~= opar.width or  ih ~= opar.height then
+    if ifmt ~= opar.format or iw ~= opar.width or ih ~= opar.height then
         swsctx = FFmpeg.sws_getCachedContext(nil, iw, ih,ifmt,
         opar.width, opar.height, opar.format,
         FFmpeg.SWS_BICUBIC, nil, nil, nil)
-        FFmpeg.av_log(fmtctx(ofile), FFmpeg.AV_LOG_WARNING, string.format('swsctx %s:%dx%d->%s:%dx%d\n',
+        FFmpeg.av_log(ctx, FFmpeg.AV_LOG_WARNING, string.format('swsctx %s:%dx%d->%s:%dx%d\n',
         ffi.string(FFmpeg.av_get_pix_fmt_name(ifmt)), iw, ih,
         ffi.string(FFmpeg.av_get_pix_fmt_name(opar.format)), opar.width, opar.height))
         sws_frame = ffi.new('AVFrame*[1]', FFmpeg.av_frame_alloc())
@@ -156,10 +173,18 @@ local function add_stream(ofile, uid, sid, info)
     local avctx = ffi.new('AVCodecContext*[1]', FFmpeg.avcodec_alloc_context3(codec))
     ffi.gc(avctx, FFmpeg.avcodec_free_context)
 
-    avctx[0].time_base.num, avctx[0].time_base.den = ost.time_base.num, ost.time_base.den
+    avctx[0].time_base.num, avctx[0].time_base.den = 25,1
+    if ofile.framerate then
+        avctx[0].time_base.num = tonumber(ofile.framerate)
+        _OPT.mark_used(ofile, 'framerate')
+    elseif fltctx then
+        local fps = FFmpeg.av_buffersink_get_frame_rate(fltctx[0]).num
+        if fps > 0 then avctx[0].time_base.num = fps end
+    end
+
     local ret = FFmpeg.avcodec_parameters_to_context(avctx[0], opar)
     FFmpeg.assert(ret, 'avcodec_parameters_to_context')
-    local dict = _OPT.codec_dict(ofile, opar.codec_id, fmtctx(ofile), ost, codec)
+    local dict = _OPT.codec_dict(ofile, opar.codec_id, ctx, ost, codec)
     local ret = FFmpeg.avcodec_open2(avctx[0], codec, dict)
     FFmpeg.assert(ret, 'avcodec_open2')
     ret = FFmpeg.avcodec_parameters_from_context(opar, avctx[0])
@@ -183,8 +208,8 @@ end
 local function open_ofile(ofile)
     local name = url(ofile)
     local ctx = fmtctx(ofile, true)
-    ofile.m = _OPT.stream_map(ofile)
-    for uid, st in pairs(ofile.m) do
+    local media = _OPT.stream_map(ofile)
+    for uid, st in pairs(media) do
         for sid, info in pairs(st) do add_stream(ofile, uid, sid, info) end
     end
     FFmpeg.av_dump_format(ctx, 0, name, 1)
@@ -193,7 +218,7 @@ local function open_ofile(ofile)
     if bit.band(ctx.oformat.flags, FFmpeg.AVFMT_NOFILE) == 0 then 
         if not _OPT.y and io.open(name, 'r') then
             if _OPT.n then
-                FFmpeg.error(ctx, "File '%s' already exists. Exiting.", name)
+                FFmpeg.error(ctx, "File '%s' already exists. Exiting.\n", name)
             else
                 FFmpeg.av_log(nil, FFmpeg.AV_LOG_ERROR,
                 "File '%s' already exists. Overwrite ? [y/N]", name)
@@ -207,6 +232,7 @@ local function open_ofile(ofile)
     end
     local ret = FFmpeg.avformat_write_header(ctx, nil)
     FFmpeg.assert(ret, name)
+    _OPT.check_arg(ofile)
 end
 local function choose_output_file()
     for _, ofile in ipairs(_OPT) do
@@ -309,6 +335,7 @@ assert(ret, _TTY)
 --------------------------------------------------------------------------------
 local function transcode()
     for _, ofile in ipairs(_OPT) do open_ofile(ofile) end
+    for _, ifile in ipairs(_URL) do _OPT.check_arg(ifile) end
     while not _TTY.sigterm do
         local cur_time= FFmpeg.av_gettime_relative()
         if _TTY.check(cur_time) < 0 then break end

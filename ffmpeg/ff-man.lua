@@ -121,7 +121,17 @@ local description={
 ]],
 
     s=[[
--s[:stream_specifier] size (input/output,per-stream)’
+-s[:stream_specifier] size (input/output,per-stream)
+    Set frame size.
+    As an input option, this is a shortcut for the video_size private option,
+    recognized by some demuxers for which the frame size is either not stored
+    in the file or is configurable – e.g. raw video or video grabbers.
+
+    As an output option, this inserts the scale video filter to the end of
+    the corresponding filtergraph. Please use the scale filter directly to 
+    insert it at the beginning or some other place.
+
+    The format is ‘wxh’ (default - same as source).
 ]],
     hide_banner=[[suppress printing banner]],
 }
@@ -180,8 +190,8 @@ Video options:
     -vn                 disable video
     -vcodec codec       force video codec ('copy' to copy stream)
     -s size             set frame size (WxH or abbreviation)
-    -ab bitrate         audio bitrate (please use -b:a)
-    -b bitrate          video bitrate (please use -b:v)
+    -b:a bitrate        audio bitrate
+    -b:v bitrate        video bitrate
 ]],[[
 Advanced Video options:
     --pix_fmt format    set pixel format
@@ -220,12 +230,15 @@ local demo=[[
 -list_devices 1 -f avfoundation -i dummy -f sdl
 -f lavfi -i mandelbrot -f sdl
 -f lavfi -i testsrc -f sdl
--f lavfi -i testsrc -vf split[a][b];[a]pad=2*iw[1];[b]hflip[2];[1][2]overlay=w -f sdl -pix_fmt=rgb24
+-f lavfi -i testsrc -vf transpose=1,hflip -f sdl
+-f lavfi -i testsrc -vf pad=iw+60:ih+60:30:30:pink -f sdl
+-f lavfi -i testsrc -vf "split[a][b];[a]pad=2*iw[1];[b]hflip[2];[1][2]overlay=w" -f sdl -pix_fmt=rgb24
 -f dshow -i "video=FaceTime HD Camera" -f sdl -c:v rawvideo -pix_fmt yuv420p
 -f avfoundation -framerate 30 -i 0 -f sdl -pix_fmt yuv420p
 -i centaur_1.mpg -f sdl -c:v rawvideo --pix_fmt=yuv420p
 -i centaur_1.mpg -f sdl --vcodec=rawvideo --pix_fmt=yuv420p -s:v 640x480
 -i centaur_1.mpg -c:v libx264 out.mp4
+-i centaur_1.mpg -pix_fmt rgb8  jidu.gif
 ]]
 --------------------------------------------------------------------------------
 local h = ...
