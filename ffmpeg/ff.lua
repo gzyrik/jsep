@@ -47,7 +47,8 @@ local function open_stream(uid, sid, info)
     local ipar = ist.codecpar
     local codec = FFmpeg.avcodec_find_decoder(ipar.codec_id)
     local avctx = ffi.new('AVCodecContext*[1]', FFmpeg.avcodec_alloc_context3(codec))
-    ffi.gc(avctx, FFmpeg.avcodec_free_context)
+    avctx = ffi.gc(avctx, FFmpeg.avcodec_free_context)
+
     local ret = FFmpeg.avcodec_parameters_to_context(avctx[0], ipar)
     FFmpeg.assert(ret, name)
 
@@ -74,9 +75,11 @@ local function open_stream(uid, sid, info)
         FFmpeg.assert(ret, "Failed to link buffer source")
     end
     local packet = ffi.new('AVPacket*[1]', FFmpeg.av_packet_alloc())
-    ffi.gc(packet, FFmpeg.av_packet_free)
+    packet = ffi.gc(packet, FFmpeg.av_packet_free)
+
     local frame = ffi.new('AVFrame*[1]', FFmpeg.av_frame_alloc())
-    ffi.gc(frame, FFmpeg.av_frame_free)
+    frame = ffi.gc(frame, FFmpeg.av_frame_free)
+
     ifile[sid] = {
         avctx = avctx,
         fltctx = fltctx,
@@ -92,8 +95,9 @@ local function add_stream(ofile, uid, sid, info)
     local ost = FFmpeg.avformat_new_stream(ctx, nil)
     local opar = ost.codecpar
     --fill default parameter
-    ost.time_base.num, ost.time_base.den = ist.time_base.num, ist.time_base.den
+    ost.time_base, ost.sample_aspect_ratio = ist.time_base, ipar.sample_aspect_ratio
     opar.codec_type, opar.codec_id, opar.format = ipar.codec_type, ipar.codec_id, ipar.format
+    opar.sample_aspect_ratio = ipar.sample_aspect_ratio
     opar.width, opar.height = ipar.width, ipar.height
     if ctx.oformat ~= nil then
         if opar.codec_type == FFmpeg.AVMEDIA_TYPE_VIDEO then
@@ -119,7 +123,7 @@ local function add_stream(ofile, uid, sid, info)
         ret = FFmpeg.avfilter_graph_config(info.filter.graph[0], nil)
         FFmpeg.assert(ret, 'avfilter_graph_config')
         local graph_desc = FFmpeg.avfilter_graph_dump(info.filter.graph[0], nil)
-        ffi.gc(graph_desc, FFmpeg.av_free)
+        graph_desc=ffi.gc(graph_desc, FFmpeg.av_free)
         --FFmpeg.av_log(fmtctx(ofile), FFmpeg.AV_LOG_INFO, graph_desc)
 
         --update parameter
@@ -130,7 +134,10 @@ local function add_stream(ofile, uid, sid, info)
         flt_frame[0].format = opar.format
         flt_frame[0].width  = opar.width
         flt_frame[0].height = opar.height
-        FFmpeg.av_frame_get_buffer(flt_frame[0], 32)
+        ret = FFmpeg.av_image_alloc(flt_frame[0].data, flt_frame[0].linesize, opar.width, opar.height, opar.format, 4)
+        FFmpeg.assert(ret, 'av_image_alloc')
+        local p = flt_frame[0].data[0]
+        flt_frame=ffi.gc(flt_frame, function(f) FFmpeg.av_free(p);FFmpeg.av_frame_free(f) end)
         ifmt, iw, ih = opar.format, opar.width, opar.height
     end
     -- override parameter
@@ -163,17 +170,19 @@ local function add_stream(ofile, uid, sid, info)
         ffi.string(FFmpeg.av_get_pix_fmt_name(ifmt)), iw, ih,
         ffi.string(FFmpeg.av_get_pix_fmt_name(opar.format)), opar.width, opar.height))
         sws_frame = ffi.new('AVFrame*[1]', FFmpeg.av_frame_alloc())
-        ffi.gc(sws_frame, FFmpeg.av_frame_free)
         sws_frame[0].format = opar.format
         sws_frame[0].width  = opar.width
         sws_frame[0].height = opar.height
-        FFmpeg.av_frame_get_buffer(sws_frame[0], 32)
+        ret=FFmpeg.av_image_alloc(sws_frame[0].data, sws_frame[0].linesize, opar.width, opar.height, opar.format, 4)
+        FFmpeg.assert(ret, 'av_image_alloc')
+        local p = sws_frame[0].data[0]
+        sws_frame=ffi.gc(sws_frame, function(f) Fmpeg.av_free(p); Fmpeg.av_frame_free(f) end)
     end
     --´´½¨±àÂëµÄAVCodecContext
     local avctx = ffi.new('AVCodecContext*[1]', FFmpeg.avcodec_alloc_context3(codec))
-    ffi.gc(avctx, FFmpeg.avcodec_free_context)
+    avctx = ffi.gc(avctx, FFmpeg.avcodec_free_context)
 
-    avctx[0].time_base.num, avctx[0].time_base.den = 25,1
+    avctx[0].time_base.num, avctx[0].time_base.den = 1,25
     if ofile.framerate then
         avctx[0].time_base.num = tonumber(ofile.framerate)
         _OPT.mark_used(ofile, 'framerate')
@@ -191,7 +200,9 @@ local function add_stream(ofile, uid, sid, info)
     FFmpeg.assert(ret, 'avcodec_parameters_from_context')
 
     local packet = ffi.new('AVPacket*[1]', FFmpeg.av_packet_alloc())
-    ffi.gc(packet, FFmpeg.av_packet_free)
+    packet = ffi.gc(packet, FFmpeg.av_packet_free)
+    packet[0].stream_index = ist.index
+
     ofile[ost.index+1] = {
         avctx = avctx,
         fltctx = fltctx,
@@ -240,8 +251,8 @@ local function choose_output_file()
     end
 end
 local function choose_ocell(ofile)
-    for _, cell in ipairs(ofile) do
-        if cell.avctx then return cell end
+    for i, cell in ipairs(ofile) do
+        if cell.avctx then return cell, i-1 end
     end
 end
 local function close_ocell(ocell)
@@ -296,8 +307,10 @@ local function receive_frame(ocell)
     return ret, icell.frame[0]
 end
 local function transcode_step(ofile)
-    local ocell = choose_ocell(ofile)
+    local ocell, stream_index = choose_ocell(ofile)
     if not ocell then return close_ofile(ofile) end
+    local ctx = fmtctx(ofile)
+    local ostm = ctx.streams[stream_index]
 
     local ret, frame = receive_frame(ocell)
     if ret == FFmpeg.AVERROR_EOF then  return close_ocell(ocell) end
@@ -319,12 +332,15 @@ local function transcode_step(ofile)
     ret = FFmpeg.avcodec_send_frame(ocell.avctx[0], frame)
     FFmpeg.assert(ret, 'avcodec_send_frame')
     while true do
+        assert(ocell.packet[0].size == 0)
+        assert(ocell.packet[0].stream_index == stream_index)
         ret = FFmpeg.avcodec_receive_packet(ocell.avctx[0], ocell.packet[0])
         if ret == FFmpeg.AVERROR_AGAIN then return end
+        ocell.packet[0].pts = FFmpeg.av_rescale_q(ocell.packet[0].pts, ocell.avctx[0].time_base, ostm.time_base)
         FFmpeg.assert(ret, 'avcodec_receive_packet')
-        ret = FFmpeg.av_write_frame(fmtctx(ofile), ocell.packet[0])
+        ret = FFmpeg.av_interleaved_write_frame(ctx, ocell.packet[0])
         if ret == FFmpeg.AVERROR_EIO then return close_ofile(ofile) end
-        FFmpeg.assert(ret, 'av_write_frame')
+        FFmpeg.assert(ret, 'av_interleaved_write_frame')
     end
 end
 --------------------------------------------------------------------------------
