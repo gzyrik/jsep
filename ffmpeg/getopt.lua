@@ -63,13 +63,6 @@ local function _getopt(arg, options, repl, start)
         end
         i = i + 1
     end
-    if repl then
-        for k, v in pairs(repl) do
-            if not ret[k] and type(v) == 'string' and type(ret[v]) == 'table' then
-                ret[k] = ret[v]
-            end
-        end
-    end
     return ret
 end
 local function getopt(arg, options, repl, start)

@@ -489,4 +489,18 @@ opt.choose_pix_fmt = choose_pix_fmt
 opt.check_arg = check_unknown
 opt.mark_used = mark_used
 opt.specifier = specifier
+opt.confirm_file = function(name)
+    if opt.y and opt.n then
+        FFmpeg.error("Error, both -y and -n supplied. Exiting.\n");
+    end
+    if not opt.y and io.open(name, 'r') then
+        if opt.n then
+            FFmpeg.error("File '%s' already exists. Exiting.\n", name)
+        else
+            FFmpeg.av_log(nil, FFmpeg.AV_LOG_ERROR,
+            "File '%s' already exists. Overwrite ? [y/N]", name)
+            if io.read('*l') ~= 'y' then os.exit(0) end
+        end
+    end
+end
 return FFmpeg, opt, inputs

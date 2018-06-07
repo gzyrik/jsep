@@ -134,6 +134,16 @@ local description={
     The format is ‘wxh’ (default - same as source).
 ]],
     hide_banner=[[suppress printing banner]],
+    re=[[
+-re (input)
+    Read input at native frame rate. Mainly used to simulate a grab device,
+    or live input stream (e.g. when reading from a file). Should not be used
+    with actual grab devices or live input streams (where it can cause
+    packet loss). By default ffmpeg attempts to read the input(s) as fast
+    as possible. This option will slow down the reading of the input(s)
+    to the native frame rate of the input(s).
+    It is useful for real-time output (e.g. live streaming)
+]]
 }
 local info_options={'',[[
 Print help / information / capabilities:
@@ -171,6 +181,7 @@ local file_options={[[
 Per-file main options:
     -f fmt              force format
     -t duration         record or transcode "duration" seconds of audio/video
+    -re                 read input at native frame rate
     -to time_stop       record or transcode stop time
     -fs limit_size      set the limit file size in bytes
     -ss time_off        set the start time offset
@@ -184,12 +195,11 @@ local video_options={[[
 Video options:
     -vframes number     set the number of video frames to output
     -r rate             set frame rate (Hz value, fraction or abbreviation)
-    -s size             set frame size (WxH or abbreviation)
     -aspect aspect      set aspect ratio (4:3, 16:9 or 1.3333, 1.7777)
     -bits_per_raw_sample number  set the number of bits per raw sample
     -vn                 disable video
     -vcodec codec       force video codec ('copy' to copy stream)
-    -s size             set frame size (WxH or abbreviation)
+    -s:v size           set frame size (WxH or abbreviation)
     -b:a bitrate        audio bitrate
     -b:v bitrate        video bitrate
 ]],[[

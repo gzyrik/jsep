@@ -217,31 +217,24 @@ local function add_stream(ofile, uid, sid, info)
     }
 end
 local function open_ofile(ofile)
-    local name = url(ofile)
-    local ctx = fmtctx(ofile, true)
+    local name, ctx, ret = url(ofile), fmtctx(ofile, true)
     local media = _OPT.stream_map(ofile)
     for uid, st in pairs(media) do
-        for sid, info in pairs(st) do add_stream(ofile, uid, sid, info) end
+        for sid, info in pairs(st) do
+            add_stream(ofile, uid, sid, info)
+        end
     end
     FFmpeg.av_dump_format(ctx, 0, name, 1)
 
     --open the output url, if needed
     if bit.band(ctx.oformat.flags, FFmpeg.AVFMT_NOFILE) == 0 then 
-        if not _OPT.y and io.open(name, 'r') then
-            if _OPT.n then
-                FFmpeg.error(ctx, "File '%s' already exists. Exiting.\n", name)
-            else
-                FFmpeg.av_log(nil, FFmpeg.AV_LOG_ERROR,
-                "File '%s' already exists. Overwrite ? [y/N]", name)
-                if io.read('*l') ~= 'y' then os.exit(0) end
-            end
-        end
+        _OPT.confirm_file(name)
         local pb = ffi.new('AVIOContext*[1]')
         ret = FFmpeg.avio_open(pb, name, FFmpeg.AVIO_FLAG_WRITE)
-        assert(ret, name)
+        FFmpeg.assert(ret, name)
         ctx.pb = pb[0]
     end
-    local ret = FFmpeg.avformat_write_header(ctx, nil)
+    ret = FFmpeg.avformat_write_header(ctx, nil)
     FFmpeg.assert(ret, name)
     _OPT.check_arg(ofile)
 end
@@ -285,36 +278,58 @@ local function close_ifile(ifile)
     ifile[0] = nil
 end
 --receive frame frome the peer decoder
-local function receive_frame(ocell)
+local function receive_frame(ocell, cur_time)
     local ifile = _URL[ocell.uid]
-    local icell = ifile[ocell.sid]
-    local ret = 0
+    local ctx, icell = fmtctx(ifile), ifile[ocell.sid]
+    local ret, ist = 0, ctx.streams[ocell.sid-1]
+    local decoder, frame, packet = icell.avctx[0], icell.frame[0], icell.packet[0]
+    if frame.pts ~= FFmpeg.AV_NOPTS_VALUE then
+        if frame.pts <= cur_time then
+            frame.pts = FFmpeg.AV_NOPTS_VALUE
+            return 0, frame, ist
+        else
+            return FFmpeg.AVERROR_AGAIN
+        end
+     end
     ::retry::
-    ret = FFmpeg.av_read_frame(fmtctx(ifile), icell.packet[0])
+    ret = FFmpeg.av_read_frame(ctx, packet)
     if ret == 0 then
-        if icell.packet[0].stream_index + 1 ~= ocell.sid then goto retry end
-        ret = FFmpeg.avcodec_send_packet(icell.avctx[0], icell.packet[0])
+        if packet.stream_index + 1 ~= ocell.sid then goto retry end
+        ret = FFmpeg.avcodec_send_packet(decoder, packet)
         if ret == 0 then
-            ret = FFmpeg.avcodec_receive_frame(icell.avctx[0], icell.frame[0])
-            if ret == FFmpeg.AVERROR_AGAIN then goto retry end
+            ret = FFmpeg.avcodec_receive_frame(decoder, frame)
+            if ret == FFmpeg.AVERROR_AGAIN then goto retry
+            elseif ret == 0 then
+                if icell.fltctx then
+                    ret = FFmpeg.av_buffersrc_add_frame_flags(icell.fltctx[0], frame, FFmpeg.AV_BUFFERSRC_FLAG_KEEP_REF)
+                    FFmpeg.assert(ret, 'Error while feeding the filtergraph')
+                end
+                if ifile.re then
+                    local pos = frame.best_effort_timestamp * 1000000 * ist.time_base.num / ist.time_base.den
+                    if pos > cur_time then
+                        frame.pts = pos
+                        return FFmpeg.AVERROR_AGAIN
+                    end
+                end
+            end
         end
     end
-    if ret == 0 and icell.fltctx then
-        ret = FFmpeg.av_buffersrc_add_frame_flags(icell.fltctx[0],
-        icell.frame[0], FFmpeg.AV_BUFFERSRC_FLAG_KEEP_REF)
-        FFmpeg.assert(ret, 'Error while feeding the filtergraph')
-    end
-    return ret, icell.frame[0]
+    return ret, frame, ist
 end
-local function transcode_step(ofile)
+local function transcode_step(ofile, cur_time)
     local ocell, stream_index = choose_ocell(ofile)
     if not ocell then return close_ofile(ofile) end
-    local ctx = fmtctx(ofile)
-    local ostm = ctx.streams[stream_index]
+    local ctx, encoder, packet = fmtctx(ofile), ocell.avctx[0], ocell.packet[0]
+    local ost = ctx.streams[stream_index]
 
-    local ret, frame = receive_frame(ocell)
-    if ret == FFmpeg.AVERROR_EOF then  return close_ocell(ocell) end
-    FFmpeg.assert(ret, 'decode_frame')
+    local ret, frame, ist = receive_frame(ocell, cur_time)
+    if ret == FFmpeg.AVERROR_EOF then return close_ocell(ocell)
+    elseif ret == FFmpeg.AVERROR_AGAIN then return end
+    FFmpeg.assert(ret, 'receive_frame')
+
+    -- encoder sequence number
+    local seq = FFmpeg.av_rescale_q(frame.best_effort_timestamp, ist.time_base, encoder.time_base)
+    if seq < ocell.pts then return end
 
     if ocell.fltctx ~= nil then
         ret = FFmpeg.av_buffersink_get_frame(ocell.fltctx[0], ocell.flt_frame[0])
@@ -328,17 +343,16 @@ local function transcode_step(ofile)
         FFmpeg.assert(ret, 'Error sws_scale')
         frame = ocell.sws_frame[0]
     end
-    frame.pts, ocell.pts = ocell.pts, ocell.pts+1
-    ret = FFmpeg.avcodec_send_frame(ocell.avctx[0], frame)
+    frame.pts, ocell.pts = seq, seq+1
+    ret = FFmpeg.avcodec_send_frame(encoder, frame)
     FFmpeg.assert(ret, 'avcodec_send_frame')
     while true do
-        assert(ocell.packet[0].size == 0)
-        assert(ocell.packet[0].stream_index == stream_index)
-        ret = FFmpeg.avcodec_receive_packet(ocell.avctx[0], ocell.packet[0])
+        assert(packet.size == 0 and packet.stream_index == stream_index)
+        ret = FFmpeg.avcodec_receive_packet(encoder, packet)
         if ret == FFmpeg.AVERROR_AGAIN then return end
-        ocell.packet[0].pts = FFmpeg.av_rescale_q(ocell.packet[0].pts, ocell.avctx[0].time_base, ostm.time_base)
         FFmpeg.assert(ret, 'avcodec_receive_packet')
-        ret = FFmpeg.av_interleaved_write_frame(ctx, ocell.packet[0])
+        packet.pts = FFmpeg.av_rescale_q(packet.pts, encoder.time_base, ost.time_base)
+        ret = FFmpeg.av_interleaved_write_frame(ctx, packet)
         if ret == FFmpeg.AVERROR_EIO then return close_ofile(ofile) end
         FFmpeg.assert(ret, 'av_interleaved_write_frame')
     end
@@ -352,6 +366,7 @@ assert(ret, _TTY)
 local function transcode()
     for _, ofile in ipairs(_OPT) do open_ofile(ofile) end
     for _, ifile in ipairs(_URL) do _OPT.check_arg(ifile) end
+    local start_time = FFmpeg.av_gettime_relative() -- microseconds
     while not _TTY.sigterm do
         local cur_time= FFmpeg.av_gettime_relative()
         if _TTY.check(cur_time) < 0 then break end
@@ -359,7 +374,7 @@ local function transcode()
         local ofile = choose_output_file()
         if not ofile then break end
 
-        transcode_step(ofile)
+        transcode_step(ofile, cur_time - start_time)
     end
     for _, ifile in ipairs(_URL) do close_ifile(ifile) end
     for _, ofile in ipairs(_OPT) do close_ofile(ofile) end
