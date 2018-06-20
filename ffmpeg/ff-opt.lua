@@ -1,7 +1,7 @@
 local CWD, ARG =...
 --------------------------------------------------------------------------------
 local inputs, opt ={},{}
-local global={'sdk','cdef',
+local global={'sdk','cdef', 'sdp_file',
     'y','n','hide_banner', 'v',
     'protocols', 'filters', 'pix_fmts',
     'codecs', 'decoders', 'encoders',
@@ -178,20 +178,19 @@ local function fmtctx(file, output)
     if output then
         local ret = FFmpeg.avformat_alloc_output_context2(ctx, nil, file.f, name)
         FFmpeg.assert(ret, name)
-        file.f = nil
     else
         for _, ofile in ipairs(opt) do
             if ofile == file then error('output file as input', 2) end
         end
         local ret = FFmpeg.avformat_open_input(ctx, name, file.f, format_dict(file))
         FFmpeg.assert(ret, name)
-        file.f = nil
 
         local ret = FFmpeg.avformat_find_stream_info(ctx[0], nil)
         FFmpeg.assert(ret, name)
 
         FFmpeg.av_dump_format(ctx[0], 0, name, 0)
     end
+    mark_used(file, 'f')
     return file[0].fmtctx[0]
 end
 local function specifier(val, ctx, stream)
@@ -501,6 +500,36 @@ opt.confirm_file = function(name)
             "File '%s' already exists. Overwrite ? [y/N]", name)
             if io.read('*l') ~= 'y' then os.exit(0) end
         end
+    end
+end
+opt.print_sdp = function()
+    local avc = ffi.new('AVFormatContext* [?]', #opt)
+    local j=0
+    for _, ofile in ipairs(opt) do
+        local ctx = fmtctx(ofile)
+        if ffi.C.strcmp(ctx.oformat.name, "rtp") == 0 then
+            avc[j] = ctx
+            j = j+1
+        end
+    end
+    if j == 0 then
+        if opt.sdp_file then
+            FFmpeg.av_log(nil, FFmpeg.AV_LOG_WARNING,
+            "No output is an rtp stream for sdp file '%s'\n", opt.sdp_file)
+        end
+        return
+    end
+    local sdp = ffi.new('char[?]', 16384)
+    FFmpeg.av_sdp_create(avc, j, sdp, 16384)
+    if type(opt.sdp_file) ~='string' then
+        io.write("SDP:\n", ffi.string(sdp), '\n')
+        io.flush()
+    else
+        local sdp_pb = ffi.new('AVIOContext*[1]')
+        local ret = FFmpeg.avio_open2(sdp_pb, opt.sdp_file, FFmpeg.AVIO_FLAG_WRITE, nil, nil)
+        FFmpeg.assert(ret, "Failed to open sdp file '%s'\n", opt.sdp_file)
+        FFmpeg.avio_printf(sdp_pb[0], "SDP:\n%s", sdp)
+        FFmpeg.avio_closep(sdp_pb);
     end
 end
 return FFmpeg, opt, inputs

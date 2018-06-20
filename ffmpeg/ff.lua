@@ -36,8 +36,7 @@ assert(ret, FFmpeg)
 local url, fmtctx = _OPT.url, _OPT.fmtctx
 --------------------------------------------------------------------------------
 local ffi, bit = require'ffi', require'bit'
-local function open_stream(uid, sid, info)
-    local ifile = _URL[uid]
+local function open_stream(ifile, uid, sid, info)
     local name, ctx = url(ifile),fmtctx(ifile)
     assert(sid <= ctx.nb_streams)
     local ist = ctx.streams[sid-1]
@@ -89,8 +88,8 @@ local function open_stream(uid, sid, info)
     return ist
 end
 local function add_stream(ofile, uid, sid, info)
-    local ctx = fmtctx(ofile)
-    local ist = open_stream(uid, sid, info)
+    local ctx, ifile = fmtctx(ofile), _URL[uid]
+    local ist = open_stream(ifile, uid, sid, info)
     local ipar = ist.codecpar
     local ost = FFmpeg.avformat_new_stream(ctx, nil)
     local opar = ost.codecpar
@@ -215,6 +214,9 @@ local function add_stream(ofile, uid, sid, info)
         sid=sid,
         pts=0,
     }
+    -- change other parameter
+    if ofile.f == 'sdl' and not ifile.re then ifile.re = true end
+    _OPT.mark_used(ifile, 're')
 end
 local function open_ofile(ofile)
     local name, ctx, ret = url(ofile), fmtctx(ofile, true)
@@ -366,6 +368,7 @@ assert(ret, _TTY)
 local function transcode()
     for _, ofile in ipairs(_OPT) do open_ofile(ofile) end
     for _, ifile in ipairs(_URL) do _OPT.check_arg(ifile) end
+    _OPT.print_sdp()
     local start_time = FFmpeg.av_gettime_relative() -- microseconds
     while not _TTY.sigterm do
         local cur_time= FFmpeg.av_gettime_relative()

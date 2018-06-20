@@ -7,6 +7,12 @@ local description={
 -cdef file
     Set luajit ctype file
 ]],
+    sdp_file=[[
+-sdp_file file (global)
+    Print sdp information for an output stream to file. This allows dumping
+    sdp information when at least one output isn’t an rtp stream.
+    (Requires at least one of the output formats to be rtp).
+]],
     v=[[
 -v [flags+]loglevel
     Set logging level and flags used by the library.
@@ -167,11 +173,12 @@ Print help / information / capabilities:
 ]]}
 local global_options={[[
 Global options affect whole program instead of just one file:
-    -sdk                FFmpeg SDK directory
-    -cdef               FFmpeg luajit cdef file
+    -sdk path           FFmpeg SDK directory
+    -cdef file          FFmpeg luajit cdef file
     -v [flags+]loglevel set logging level
     -y                  overwrite output files
     -n                  never overwrite output files
+    -sdp_file file      specify a file in which to print sdp information
 ]],[[
 Advanced global options:
     -cpuflags flags     force specific cpu flags
@@ -254,7 +261,7 @@ local demo=[[
 local h = ...
 io.write(basic, '\n')
 if type(h) == 'string' then
-    local _, opt = string.match(h, '^(-+)(%w*)$')
+    local _, opt = string.match(h, '^(-+)([%w_]*)$')
     if not _ then
         opt = options[h]
         if opt then
