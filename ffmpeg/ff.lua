@@ -36,12 +36,43 @@ assert(ret, FFmpeg)
 local url, fmtctx = _OPT.url, _OPT.fmtctx
 --------------------------------------------------------------------------------
 local ffi, bit = require'ffi', require'bit'
-local function open_stream(ifile, uid, sid, info)
+local function config_filtergraph(filter, ist, decoder, name)
+    -- create input filter
+    local ipar = ist.codecpar
+    local args = string.format(
+    'video_size=%dx%d:pix_fmt=%d:time_base=%d/%d:pixel_aspect=%d/%d',
+    ipar.width, ipar.height,
+    tonumber(decoder.pix_fmt),
+    ist.time_base.num, ist.time_base.den,
+    ipar.sample_aspect_ratio.num, ipar.sample_aspect_ratio.den)
+    local buffer_filt = FFmpeg.avfilter_get_by_name('buffer')
+    local fltctx_in = ffi.new('AVFilterContext*[1]') -- free by graph 
+    local ret = FFmpeg.avfilter_graph_create_filter(fltctx_in, buffer_filt, name.buffer, args, nil, filter.graph[0])
+    FFmpeg.assert(ret, "Failed to create buffer source")
+    ret = FFmpeg.avfilter_link(fltctx_in[0], 0, filter.inputs[0].filter_ctx, filter.inputs[0].pad_idx)
+    FFmpeg.assert(ret, "Failed to link buffer source")
+    -- create output filter
+    local fltctx_out = ffi.new('AVFilterContext*[1]') -- free by graph
+    local buffersink = FFmpeg.avfilter_get_by_name("buffersink")
+    local ret = FFmpeg.avfilter_graph_create_filter(fltctx_out, buffersink, name.buffersink, nil, nil, filter.graph[0])
+    FFmpeg.assert(ret, "Failed to create buffer sink");
+    ret = FFmpeg.avfilter_link(filter.outputs[0].filter_ctx, filter.outputs[0].pad_idx, fltctx_out[0], 0)
+    FFmpeg.assert(ret, "Failed to link buffer sink")
+
+    ret = FFmpeg.avfilter_graph_config(filter.graph[0], nil)
+    FFmpeg.assert(ret, 'avfilter_graph_config')
+    local graph_desc = FFmpeg.avfilter_graph_dump(filter.graph[0], nil)
+    graph_desc=ffi.gc(graph_desc, FFmpeg.av_free)
+    --FFmpeg.av_log(fmtctx(ofile), FFmpeg.AV_LOG_INFO, graph_desc)
+    return fltctx_in, fltctx_out
+end
+
+local function open_stream(ifile, uid, sid)
     local name, ctx = url(ifile),fmtctx(ifile)
     assert(sid <= ctx.nb_streams)
     local ist = ctx.streams[sid-1]
     assert(ist.index+1 == sid, name)
-    if ifile[sid] then return ist end
+    if ifile[sid] then return ist, ifile[sid].avctx[0] end
 
     local ipar = ist.codecpar
     local codec = FFmpeg.avcodec_find_decoder(ipar.codec_id)
@@ -54,25 +85,6 @@ local function open_stream(ifile, uid, sid, info)
     local dict = _OPT.codec_dict(ifile, ipar.codec_id, fmtctx(ifile), ist, codec)
     local ret = FFmpeg.avcodec_open2(avctx[0], codec, dict)
     FFmpeg.assert(ret, name)
-    local fltctx
-    if info.filter then
-        local name = string.format("%d:%d",uid-1,sid-1)
-        local args = string.format(
-        'video_size=%dx%d:pix_fmt=%d:time_base=%d/%d:pixel_aspect=%d/%d',
-        ipar.width,
-        ipar.height,
-        tonumber(avctx[0].pix_fmt),
-        ist.time_base.num,
-        ist.time_base.den,
-        ipar.sample_aspect_ratio.num,
-        ipar.sample_aspect_ratio.den)
-        local buffer_filt = FFmpeg.avfilter_get_by_name('buffer')
-        fltctx = ffi.new('AVFilterContext*[1]') -- free by graph 
-        ret = FFmpeg.avfilter_graph_create_filter(fltctx, buffer_filt, name, args, nil, info.filter.graph[0])
-        FFmpeg.assert(ret, "Failed to create buffer source")
-        ret = FFmpeg.avfilter_link(fltctx[0], 0, info.filter.inputs[0].filter_ctx, info.filter.inputs[0].pad_idx)
-        FFmpeg.assert(ret, "Failed to link buffer source")
-    end
     local packet = ffi.new('AVPacket*[1]', FFmpeg.av_packet_alloc())
     packet = ffi.gc(packet, FFmpeg.av_packet_free)
 
@@ -81,15 +93,15 @@ local function open_stream(ifile, uid, sid, info)
 
     ifile[sid] = {
         avctx = avctx,
-        fltctx = fltctx,
         frame = frame,
         packet = packet,
+        frame_time = FFmpeg.AV_NOPTS_VALUE,
     }
-    return ist
+    return ist, avctx[0]
 end
 local function add_stream(ofile, uid, sid, info)
     local ctx, ifile = fmtctx(ofile), _URL[uid]
-    local ist = open_stream(ifile, uid, sid, info)
+    local ist, decoder = open_stream(ifile, uid, sid)
     local ipar = ist.codecpar
     local ost = FFmpeg.avformat_new_stream(ctx, nil)
     local opar = ost.codecpar
@@ -109,26 +121,17 @@ local function add_stream(ofile, uid, sid, info)
     end
     local ifmt, iw, ih = opar.format, opar.width, opar.height
     --add filter
-    local fltctx,flt_frame
+    local fltctx_in, fltctx_out, flt_frame
     if info.filter then
-        fltctx = ffi.new('AVFilterContext*[1]') -- free by graph
-        local buffersink = FFmpeg.avfilter_get_by_name("buffersink")
-        local name = string.format("%s:%d", url(ofile), ost.index)
-        ret = FFmpeg.avfilter_graph_create_filter(fltctx, buffersink, name, nil, nil, info.filter.graph[0])
-        FFmpeg.assert(ret, "Failed to create buffer sink");
-        ret = FFmpeg.avfilter_link(info.filter.outputs[0].filter_ctx, info.filter.outputs[0].pad_idx, fltctx[0], 0)
-        FFmpeg.assert(ret, "Failed to link buffer sink")
-
-        ret = FFmpeg.avfilter_graph_config(info.filter.graph[0], nil)
-        FFmpeg.assert(ret, 'avfilter_graph_config')
-        local graph_desc = FFmpeg.avfilter_graph_dump(info.filter.graph[0], nil)
-        graph_desc=ffi.gc(graph_desc, FFmpeg.av_free)
-        --FFmpeg.av_log(fmtctx(ofile), FFmpeg.AV_LOG_INFO, graph_desc)
-
+        fltctx_in, fltctx_out = config_filtergraph(info.filter, ist, decoder, {
+            buffer=string.format("%d:%d",uid-1,sid-1),
+            buffersink=string.format("%s:%d", url(ofile), ost.index)
+        })
         --update parameter
-        opar.format = FFmpeg.av_buffersink_get_format(fltctx[0])
-        opar.width = FFmpeg.av_buffersink_get_w(fltctx[0])
-        opar.height = FFmpeg.av_buffersink_get_h(fltctx[0])
+        opar.format = FFmpeg.av_buffersink_get_format(fltctx_out[0])
+        opar.width = FFmpeg.av_buffersink_get_w(fltctx_out[0])
+        opar.height = FFmpeg.av_buffersink_get_h(fltctx_out[0])
+
         flt_frame = ffi.new('AVFrame*[1]', FFmpeg.av_frame_alloc())
         flt_frame[0].format = opar.format
         flt_frame[0].width  = opar.width
@@ -185,8 +188,8 @@ local function add_stream(ofile, uid, sid, info)
     if ofile.framerate then
         avctx[0].time_base.num = tonumber(ofile.framerate)
         _OPT.mark_used(ofile, 'framerate')
-    elseif fltctx then
-        local fps = FFmpeg.av_buffersink_get_frame_rate(fltctx[0]).num
+    elseif fltctx_out then
+        local fps = FFmpeg.av_buffersink_get_frame_rate(fltctx_out[0]).num
         if fps > 0 then avctx[0].time_base.num = fps end
     end
 
@@ -204,11 +207,12 @@ local function add_stream(ofile, uid, sid, info)
 
     ofile[ost.index+1] = {
         avctx = avctx,
-        fltctx = fltctx,
+        fltctx_in = fltctx_in,
+        fltctx_out = fltctx_out,
         flt_frame = flt_frame,
         swsctx = swsctx,
         sws_frame = sws_frame,
-        filter = info.filter,
+        filter_info = info.filter,
         packet = packet,
         uid=uid,
         sid=sid,
@@ -253,7 +257,7 @@ end
 local function close_ocell(ocell)
     if not ocell.avctx then return end
     ocell.avctx = nil
-    ocell.filter = nil
+    ocell.filter_info = nil
     ocell.flt_frame = nil
     ocell.sws_frame = nil
     ocell.packet = nil
@@ -285,14 +289,10 @@ local function receive_frame(ocell, cur_time)
     local ctx, icell = fmtctx(ifile), ifile[ocell.sid]
     local ret, ist = 0, ctx.streams[ocell.sid-1]
     local decoder, frame, packet = icell.avctx[0], icell.frame[0], icell.packet[0]
-    if frame.pts ~= FFmpeg.AV_NOPTS_VALUE then
-        if frame.pts <= cur_time then
-            frame.pts = FFmpeg.AV_NOPTS_VALUE
-            return 0, frame, ist
-        else
-            return FFmpeg.AVERROR_AGAIN
-        end
-     end
+    if ifile.re and icell.frame_time ~= FFmpeg.AV_NOPTS_VALUE then
+        if icell.frame_time > cur_time then return FFmpeg.AVERROR_AGAIN end
+        goto finish
+    end
     ::retry::
     ret = FFmpeg.av_read_frame(ctx, packet)
     if ret == 0 then
@@ -302,20 +302,19 @@ local function receive_frame(ocell, cur_time)
             ret = FFmpeg.avcodec_receive_frame(decoder, frame)
             if ret == FFmpeg.AVERROR_AGAIN then goto retry
             elseif ret == 0 then
-                if icell.fltctx then
-                    ret = FFmpeg.av_buffersrc_add_frame_flags(icell.fltctx[0], frame, FFmpeg.AV_BUFFERSRC_FLAG_KEEP_REF)
-                    FFmpeg.assert(ret, 'Error while feeding the filtergraph')
-                end
-                if ifile.re then
-                    local pos = frame.best_effort_timestamp * 1000000 * ist.time_base.num / ist.time_base.den
-                    if pos > cur_time then
-                        frame.pts = pos
-                        return FFmpeg.AVERROR_AGAIN
+                if frame.best_effort_timestamp ~= FFmpeg.AV_NOPTS_VALUE then
+                    if not icell.first_effort_timestamp then icell.first_effort_timestamp = frame.best_effort_timestamp end
+                    frame.best_effort_timestamp = frame.best_effort_timestamp - icell.first_effort_timestamp
+                    if ifile.re then
+                        icell.frame_time = frame.best_effort_timestamp * 1000000 * ist.time_base.num / ist.time_base.den
+                        if icell.frame_time > cur_time then return FFmpeg.AVERROR_AGAIN end
                     end
                 end
             end
         end
     end
+    ::finish::
+    icell.frame_time = FFmpeg.AV_NOPTS_VALUE
     return ret, frame, ist
 end
 local function transcode_step(ofile, cur_time)
@@ -331,10 +330,14 @@ local function transcode_step(ofile, cur_time)
 
     -- encoder sequence number
     local seq = FFmpeg.av_rescale_q(frame.best_effort_timestamp, ist.time_base, encoder.time_base)
-    if seq < ocell.pts then return end
+    if seq < ocell.pts then return end --ignore the old frame
 
-    if ocell.fltctx ~= nil then
-        ret = FFmpeg.av_buffersink_get_frame(ocell.fltctx[0], ocell.flt_frame[0])
+    if ocell.fltctx_in then
+        ret = FFmpeg.av_buffersrc_add_frame_flags(ocell.fltctx_in[0], frame, FFmpeg.AV_BUFFERSRC_FLAG_KEEP_REF)
+        FFmpeg.assert(ret, 'Error while feeding the filtergraph')
+    end
+    if ocell.fltctx_out then
+        ret = FFmpeg.av_buffersink_get_frame(ocell.fltctx_out[0], ocell.flt_frame[0])
         if ret == FFmpeg.AVERROR_AGAIN then return end
         FFmpeg.assert(ret, 'Error while fetching the filtergraph')
         frame = ocell.flt_frame[0]

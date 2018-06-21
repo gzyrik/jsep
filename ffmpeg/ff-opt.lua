@@ -93,6 +93,7 @@ assert(cmd, ret)
 cmd, ret = pcall(cmd, FFmpeg, opt)
 assert(cmd, ret)
 if #inputs ==0 then os.exit(0) end
+if #opt == 0 then table.insert(opt, {f='sdl'}) end -- default to show
 --------------------------------------------------------------------------------
 local ffi, bit = require'ffi', require'bit'
 local function prepare(files, input)
@@ -176,6 +177,7 @@ local function fmtctx(file, output)
 
     file[0] = { fmtctx = ctx }
     if output then
+        if not name and not file.f then file.f = 'sdl' end -- default to show
         local ret = FFmpeg.avformat_alloc_output_context2(ctx, nil, file.f, name)
         FFmpeg.assert(ret, name)
     else

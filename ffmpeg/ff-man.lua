@@ -252,6 +252,8 @@ local demo=[[
 -f lavfi -i testsrc -vf "split[a][b];[a]pad=2*iw[1];[b]hflip[2];[1][2]overlay=w" -f sdl -pix_fmt=rgb24
 -f dshow -i "video=FaceTime HD Camera" -f sdl -c:v rawvideo -pix_fmt yuv420p
 -f avfoundation -framerate 30 -i 0 -f sdl -pix_fmt yuv420p
+-re -i acute_vga.avi -vcodec libx264 -f rtp rtp://127.0.0.1:38000 >test.sdp
+-protocol_whitelist "file,udp,rtp" -i test.sdp -f sdl
 -i centaur_1.mpg -f sdl -c:v rawvideo --pix_fmt=yuv420p
 -i centaur_1.mpg -f sdl --vcodec=rawvideo --pix_fmt=yuv420p -s:v 640x480
 -i centaur_1.mpg -c:v libx264 out.mp4
