@@ -95,7 +95,7 @@ local function open_stream(ifile, uid, sid)
         avctx = avctx,
         frame = frame,
         packet = packet,
-        frame_time = FFmpeg.AV_NOPTS_VALUE,
+        frame_time = 0,
     }
     return ist, avctx[0]
 end
@@ -178,7 +178,7 @@ local function add_stream(ofile, uid, sid, info)
         ret=FFmpeg.av_image_alloc(sws_frame[0].data, sws_frame[0].linesize, opar.width, opar.height, opar.format, 4)
         FFmpeg.assert(ret, 'av_image_alloc')
         local p = sws_frame[0].data[0]
-        sws_frame=ffi.gc(sws_frame, function(f) Fmpeg.av_free(p); Fmpeg.av_frame_free(f) end)
+        sws_frame=ffi.gc(sws_frame, function(f) FFmpeg.av_free(p); FFmpeg.av_frame_free(f) end)
     end
     --´´½¨±àÂëµÄAVCodecContext
     local avctx = ffi.new('AVCodecContext*[1]', FFmpeg.avcodec_alloc_context3(codec))
@@ -244,11 +244,6 @@ local function open_ofile(ofile)
     FFmpeg.assert(ret, name)
     _OPT.check_arg(ofile)
 end
-local function choose_output_file()
-    for _, ofile in ipairs(_OPT) do
-        if ofile[0] then return ofile end
-    end
-end
 local function choose_ocell(ofile)
     for i, cell in ipairs(ofile) do
         if cell.avctx then return cell, i-1 end
@@ -289,32 +284,31 @@ local function receive_frame(ocell, cur_time)
     local ctx, icell = fmtctx(ifile), ifile[ocell.sid]
     local ret, ist = 0, ctx.streams[ocell.sid-1]
     local decoder, frame, packet = icell.avctx[0], icell.frame[0], icell.packet[0]
-    if ifile.re and icell.frame_time ~= FFmpeg.AV_NOPTS_VALUE then
-        if icell.frame_time > cur_time then return FFmpeg.AVERROR_AGAIN end
-        goto finish
-    end
+    if icell.frame_time == cur_time then goto finish end
+    if ifile.re and icell.frame_time > cur_time then return FFmpeg.AVERROR_AGAIN end
+
     ::retry::
     ret = FFmpeg.av_read_frame(ctx, packet)
-    if ret == 0 then
-        if packet.stream_index + 1 ~= ocell.sid then goto retry end
-        ret = FFmpeg.avcodec_send_packet(decoder, packet)
-        if ret == 0 then
-            ret = FFmpeg.avcodec_receive_frame(decoder, frame)
-            if ret == FFmpeg.AVERROR_AGAIN then goto retry
-            elseif ret == 0 then
-                if frame.best_effort_timestamp ~= FFmpeg.AV_NOPTS_VALUE then
-                    if not icell.first_effort_timestamp then icell.first_effort_timestamp = frame.best_effort_timestamp end
-                    frame.best_effort_timestamp = frame.best_effort_timestamp - icell.first_effort_timestamp
-                    if ifile.re then
-                        icell.frame_time = frame.best_effort_timestamp * 1000000 * ist.time_base.num / ist.time_base.den
-                        if icell.frame_time > cur_time then return FFmpeg.AVERROR_AGAIN end
-                    end
-                end
-            end
+    if ret ~= 0 then goto finish end
+    if packet.stream_index + 1 ~= ocell.sid then goto retry end
+
+    ret = FFmpeg.avcodec_send_packet(decoder, packet)
+    if ret ~= 0 then goto finish end
+
+    ret = FFmpeg.avcodec_receive_frame(decoder, frame)
+    if ret == FFmpeg.AVERROR_AGAIN then goto retry
+    elseif ret == 0 then
+        if not icell.first_effort_timestamp then icell.first_effort_timestamp = frame.best_effort_timestamp end
+        frame.best_effort_timestamp = frame.best_effort_timestamp - icell.first_effort_timestamp
+        if ifile.re then
+            icell.frame_time = frame.best_effort_timestamp * 1000000 * ist.time_base.num / ist.time_base.den
+            if icell.frame_time > cur_time then return FFmpeg.AVERROR_AGAIN end
+        else
+            icell.frame_time = cur_time
         end
     end
+
     ::finish::
-    icell.frame_time = FFmpeg.AV_NOPTS_VALUE
     return ret, frame, ist
 end
 local function transcode_step(ofile, cur_time)
@@ -377,10 +371,14 @@ local function transcode()
         local cur_time= FFmpeg.av_gettime_relative()
         if _TTY.check(cur_time) < 0 then break end
 
-        local ofile = choose_output_file()
-        if not ofile then break end
-
-        transcode_step(ofile, cur_time - start_time)
+        local processing
+        for _, ofile in ipairs(_OPT) do
+            if ofile[0] then
+                processing = true
+                transcode_step(ofile, cur_time - start_time)
+            end
+        end
+        if not processing then break end
     end
     for _, ifile in ipairs(_URL) do close_ifile(ifile) end
     for _, ofile in ipairs(_OPT) do close_ofile(ofile) end
