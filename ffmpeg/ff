@@ -1,0 +1,8 @@
+#!/bin/sh
+PROGDIR=`readlink $0`
+if [ -z "$PROGDIR" ]; then
+  PROGDIR=$0
+fi
+PROGDIR=`dirname $PROGDIR`
+PROGDIR=`cd $PROGDIR && pwd -P`
+lua $PROGDIR/ff.lua $@

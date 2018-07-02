@@ -54,33 +54,48 @@ end
 local SEP = string.sub(package.config, 1, 1)
 -- read cached sdk list from sdk.txt
 local sdk_list={}
+local sdk_cout=0
 for line in io.lines(CWD..'sdk.txt') do 
-    local file
+    local file = string.gsub(line, '/', SEP)
     local suffix = string.match(package.cpath, '.*(%..*)')
     if SEP == '\\' then
-        line = string.gsub(line, '/', SEP)
-        file = io.popen('dir /B '..line..'bin\\*.dll 2>NUL')
+        file = io.popen('dir /B '..file..'bin\\*.dll 2>NUL')
     else
-        file = io.popen('ls '..line..'bin/*'..suffix..' 2>/dev/null')
+        file = io.popen('ls '..file..'bin/*'..suffix..' 2>/dev/null')
     end
     if string.match(file:read('*all'), '.*%'..suffix) then
-        table.insert(sdk_list, 1, line)
+        sdk_cout = sdk_cout + 1
+        table.insert(sdk_list, sdk_cout, line)
     else
         table.insert(sdk_list, line)
     end
     file:close()
 end
-if not opt.sdk then opt.sdk, sdk_list = sdk_list[1] end
+if not opt.sdk then 
+    if sdk_cout > 0 then opt.sdk, sdk_list = string.gsub(sdk_list[1],'/',SEP),nil end
+else
+    if string.sub(opt.sdk, -1) ~= SEP then opt.sdk = opt.sdk .. SEP end
+end
 assert(opt.sdk, "\nUse -sdk to set ffmpeg sdk dir, run '-h -sdk' for help")
-if string.sub(opt.sdk, -1) ~= SEP then opt.sdk = opt.sdk .. SEP end
 if not opt.cdef then opt.cdef = CWD .. string.match(opt.sdk, '[_-](%d*%.%d*)')..'.cdef' end
 --------------------------------------------------------------------------------
 local FFmpeg, ret = loadfile(CWD..'init.lua')
 assert(FFmpeg, ret)
 FFmpeg = FFmpeg(opt.sdk, opt.cdef, CWD)
 if sdk_list then -- insert sdk to sdk.txt
+    local abs_sdk
+    if SEP == '\\' then
+        local file = io.popen('dir /B /S '..opt.sdk..'bin'..SEP..'avcodec*.dll')
+        abs_sdk = string.match(file:read('*all'),'^(.*)bin')
+        file:close()
+    elseif string.sub(opt.sdk,1,1) ~= SEP then
+        abs_sdk = os.getenv('PWD')..SEP..opt.sdk
+    end
+    abs_sdk=string.gsub(abs_sdk, SEP, '/')
+    opt.sdk=string.gsub(opt.sdk, SEP, '/')
     table.insert(sdk_list, 1, opt.sdk)
-    local file = io.open(CWD..'sdk.txt', 'w')
+    if abs_sdk ~= opt.sdk then table.insert(sdk_list, 1, abs_sdk) end
+    local file = io.open(CWD..'sdk.txt', 'wb')
     for i, v in ipairs(sdk_list) do -- remove duplicate
         if not sdk_list[v] then file:write(v, '\n') end
         sdk_list[v] = i
@@ -199,7 +214,7 @@ local function specifier(val, ctx, stream)
     local t = type(val)
     if t == 'table' then
         for k, v in pairs(val) do
-            if FFmpeg.avformat_match_stream_specifier(ctx, stream, k) > 0 then
+            if FFmpeg.avformat_match_stream_specifier(ctx, stream, tostring(k)) > 0 then
                 return v
             end
         end
@@ -236,7 +251,7 @@ local function codec_dict (opts, codec_id, ctx, stream, codec)
     end
     for k, v in pairs(opts) do
         if type(k) ~= 'string' then goto continue end
-        v = specifier(v, ctr, stream)
+        v = specifier(v, ctx, stream)
         if not v then goto continue end
 
         local k0, p = k, string.find(k, ':', 1, true)

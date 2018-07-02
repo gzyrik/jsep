@@ -5,7 +5,7 @@ local function local_dir()
         local file = io.popen('dir /B /S '..f)
         f = file:read('*all')
         file:close()
-    else
+    elseif string.sub(f,1,1) ~= SEP then
         f = os.getenv('PWD')..SEP..f
     end
     return string.match(f,'^(.*)ff%.lua')
@@ -285,7 +285,7 @@ local function receive_frame(ocell, cur_time)
     local ret, ist = 0, ctx.streams[ocell.sid-1]
     local decoder, frame, packet = icell.avctx[0], icell.frame[0], icell.packet[0]
     if icell.frame_time == cur_time then goto finish end
-    if ifile.re and icell.frame_time > cur_time then return FFmpeg.AVERROR_AGAIN end
+    if ifile.re and icell.frame_time > cur_time then return FFmpeg.AVERROR_AGAIN, icell.frame_time end
 
     ::retry::
     ret = FFmpeg.av_read_frame(ctx, packet)
@@ -302,7 +302,7 @@ local function receive_frame(ocell, cur_time)
         frame.best_effort_timestamp = frame.best_effort_timestamp - icell.first_effort_timestamp
         if ifile.re then
             icell.frame_time = frame.best_effort_timestamp * 1000000 * ist.time_base.num / ist.time_base.den
-            if icell.frame_time > cur_time then return FFmpeg.AVERROR_AGAIN end
+            if icell.frame_time > cur_time then return FFmpeg.AVERROR_AGAIN, icell.frame_time end
         else
             icell.frame_time = cur_time
         end
@@ -319,7 +319,7 @@ local function transcode_step(ofile, cur_time)
 
     local ret, frame, ist = receive_frame(ocell, cur_time)
     if ret == FFmpeg.AVERROR_EOF then return close_ocell(ocell)
-    elseif ret == FFmpeg.AVERROR_AGAIN then return end
+    elseif ret == FFmpeg.AVERROR_AGAIN then return frame end
     FFmpeg.assert(ret, 'receive_frame')
 
     -- encoder sequence number
@@ -366,19 +366,24 @@ local function transcode()
     for _, ofile in ipairs(_OPT) do open_ofile(ofile) end
     for _, ifile in ipairs(_URL) do _OPT.check_arg(ifile) end
     _OPT.print_sdp()
-    local start_time = FFmpeg.av_gettime_relative() -- microseconds
+    local start_point, cur_time = FFmpeg.av_gettime_relative(), 0 -- microseconds
     while not _TTY.sigterm do
-        local cur_time= FFmpeg.av_gettime_relative()
         if _TTY.check(cur_time) < 0 then break end
-
-        local processing
+        local seek_time
         for _, ofile in ipairs(_OPT) do
             if ofile[0] then
-                processing = true
-                transcode_step(ofile, cur_time - start_time)
+                local next_time = transcode_step(ofile, cur_time) or cur_time
+                if not seek_time or next_time < seek_time then seek_time = next_time end
             end
         end
-        if not processing then break end
+        if not seek_time then break end
+        if seek_time > cur_time then
+            cur_time = seek_time
+            seek_time = seek_time + start_point - FFmpeg.av_gettime_relative()
+            if seek_time > 0 then FFmpeg.av_usleep(seek_time) end
+        else
+            cur_time = FFmpeg.av_gettime_relative() - start_point
+        end
     end
     for _, ifile in ipairs(_URL) do close_ifile(ifile) end
     for _, ofile in ipairs(_OPT) do close_ofile(ofile) end
