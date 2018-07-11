@@ -20,13 +20,13 @@ local function _getopt(arg, options, repl, start)
             if y then
                 ret[k][y] = x
             else
-                table.insert(ret[k], x or true)
+                table.insert(ret[k], x or 'true')
             end
         elseif x then
             if ret[k] == x then return end
             ret[k] = x
         elseif not ret[k] then 
-            ret[k] = true
+            ret[k] = 'true'
         end
     end
     local function langarg(v, idx)

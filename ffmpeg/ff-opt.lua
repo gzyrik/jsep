@@ -351,17 +351,21 @@ end
 local guess_map = function (ofile)
     local m, name = {}, url(ofile)
     local vn,an = ofile.vn, ofile.an
-    if vn == nil then
-        vn = FFmpeg.av_guess_codec(fmtctx(ofile).oformat, nil, name, nil, FFmpeg.AVMEDIA_TYPE_VIDEO) == FFmpeg.AV_CODEC_ID_NONE
+    if vn == nil
+        and FFmpeg.av_guess_codec(fmtctx(ofile).oformat,
+        nil, name, nil, FFmpeg.AVMEDIA_TYPE_VIDEO) == FFmpeg.AV_CODEC_ID_NONE then
+        vn = 'true'
     else
         mark_used(ofile, 'vn')
     end
-    if an == nil then
-        an = FFmpeg.av_guess_codec(fmtctx(ofile).oformat, nil, name, nil, FFmpeg.AVMEDIA_TYPE_AUDIO) == FFmpeg.AV_CODEC_ID_NONE
+    if an == nil
+        and FFmpeg.av_guess_codec(fmtctx(ofile).oformat,
+        nil, name, nil, FFmpeg.AVMEDIA_TYPE_AUDIO) == FFmpeg.AV_CODEC_ID_NONE then
+        an =  'true'
     else
         mark_used(ofile, 'an')
     end
-    if not vn then
+    if vn ~= 'true' then
         local best_area, uidx, sidx=0
         for i, ifile in ipairs(inputs) do -- find best video: highest resolution
             local sindex = FFmpeg.av_find_best_stream(fmtctx(ifile), FFmpeg.AVMEDIA_TYPE_VIDEO, -1, -1, nil, 0);
@@ -377,6 +381,25 @@ local guess_map = function (ofile)
             local val = uidx..':'..sidx
             FFmpeg.av_log(fmtctx(ofile), FFmpeg.AV_LOG_WARNING,
             "Guess video map '%s' from '%s'\n", val, url(inputs[uidx+1]))
+            table.insert(m, val)
+        end
+    end
+    if an ~= 'true' then
+        local best_score, uidx, sidx=0
+        for i, ifile in ipairs(inputs) do -- find best audio: most channels
+            local sindex = FFmpeg.av_find_best_stream(fmtctx(ifile), FFmpeg.AVMEDIA_TYPE_AUDIO, -1, -1, nil, 0);
+            if sindex >= 0  then
+                local st = fmtctx(ifile).streams[sindex]
+                local score = st.codecpar.channels
+                if score > best_score then
+                    best_channels, uidx, sidx = score, i-1, sindex
+                end
+            end
+        end
+        if sidx then
+            local val = uidx..':'..sidx
+            FFmpeg.av_log(fmtctx(ofile), FFmpeg.AV_LOG_WARNING,
+            "Guess audio map '%s' from '%s'\n", val, url(inputs[uidx+1]))
             table.insert(m, val)
         end
     end
@@ -489,6 +512,25 @@ local function choose_pix_fmt(codec, target)
     end
     return target
 end
+local function choose_sample_fmt(codec, target)
+    local p = codec.sample_fmts;
+    while p[0] ~= FFmpeg.AV_SAMPLE_FMT_NONE do
+        if p[0] == target then return target end
+        p = p + 1
+    end
+    if target ~= FFmpeg.AV_SAMPLE_FMT_NONE then
+        if bit.band(codec.capabilities, FFmpeg.AV_CODEC_CAP_LOSSLESS) ~= 0
+            and FFmpeg.av_get_sample_fmt_name(target) > FFmpeg.av_get_sample_fmt_name(codec.sample_fmts[0]) then
+            av_log(NULL, AV_LOG_ERROR, "Conversion will not be lossless.\n");
+        end
+        FFmpeg.av_log(nil, FFmpeg.AV_LOG_WARNING,
+        "Incompatible sample format '%s' for codec '%s', auto-selecting format '%s'\n",
+        FFmpeg.av_get_sample_fmt_name(target),
+        codec.name,
+        FFmpeg.av_get_sample_fmt_name(codec.sample_fmts[0]))
+        return codec.sample_fmts[0]
+    end
+end
 local function check_unknown(opts)
     for k, v in pairs(opts) do
         if type(k) == 'string' and not opts[-2][k] then
@@ -502,15 +544,16 @@ opt.fmtctx = fmtctx
 opt.stream_map = stream_map
 opt.codec_dict = codec_dict
 opt.choose_pix_fmt = choose_pix_fmt
+opt.choose_sample_fmt = choose_sample_fmt
 opt.check_arg = check_unknown
 opt.mark_used = mark_used
 opt.specifier = specifier
 opt.confirm_file = function(name)
-    if opt.y and opt.n then
+    if opt.y == 'true' and opt.n  == 'true' then
         FFmpeg.error("Error, both -y and -n supplied. Exiting.\n");
     end
-    if not opt.y and io.open(name, 'r') then
-        if opt.n then
+    if opt.y ~= 'true' and io.open(name, 'r') then
+        if opt.n == 'true' then
             FFmpeg.error("File '%s' already exists. Exiting.\n", name)
         else
             FFmpeg.av_log(nil, FFmpeg.AV_LOG_ERROR,
