@@ -18,6 +18,7 @@ if ffi.cset(CDEF) then
     #include <libavfilter/avfilter.h>
     #include <libavfilter/buffersrc.h>
     #include <libavfilter/buffersink.h>
+    #include <libavutil/audio_fifo.h>
     ]]
     file:close()
     local file = io.popen(CWD..'cpp '..SDK..'include'..' '..tmpf)
@@ -214,7 +215,10 @@ local function cache(v, e)
         v,f= pcall(sym, mod, e)
         if v then break end
     end
-    if not v then return v, f end
+    if not v then
+        M.av_log(nil, M.AV_LOG_FATAL, "no sym: %s\n", e)
+        return v, f
+    end
 --[[
     v = string.match(tostring(f), '<(.-)%b()>')--function return type
     if v then

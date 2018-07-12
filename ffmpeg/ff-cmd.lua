@@ -535,7 +535,7 @@ local function show_help_filter(name)
 end
 ----------------------------------------------------------------------------------
 if opt.v then opt_loglevel(opt.v) end
-if not opt.hide_banner then show_banner() end
+if opt.banner == 'true' then show_banner() end
 if opt.protocols then show_protocols() end
 if opt.filters then show_filters(opt.filters) end
 if opt.pix_fmts then show_pix_fmts(opt.pix_fmts) end

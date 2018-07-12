@@ -80,6 +80,9 @@ local function open_stream(ifile, uid, sid)
     if ifile[sid] then return ist, ifile[sid].avctx[0] end
 
     local ipar = ist.codecpar
+    if ipar.channels > 0 and ipar.channel_layout == 0 then
+        ipar.channel_layout = FFmpeg.av_get_default_channel_layout(ipar.channels)
+    end
     local codec = FFmpeg.avcodec_find_decoder(ipar.codec_id)
     local avctx = ffi.new('AVCodecContext*[1]', FFmpeg.avcodec_alloc_context3(codec))
     avctx = ffi.gc(avctx, FFmpeg.avcodec_free_context)
@@ -95,6 +98,7 @@ local function open_stream(ifile, uid, sid)
 
     local frame = ffi.new('AVFrame*[1]', FFmpeg.av_frame_alloc())
     frame = ffi.gc(frame, FFmpeg.av_frame_free)
+    frame[0].nb_samples = 1
 
     ifile[sid] = {
         avctx = avctx,
@@ -114,7 +118,7 @@ local function add_stream(ofile, uid, sid, info)
     --fill default parameter
     ost.time_base, ost.sample_aspect_ratio = ist.time_base, ipar.sample_aspect_ratio
     opar.codec_type, opar.codec_id, opar.format = ipar.codec_type, ipar.codec_id, ipar.format
-    opar.sample_aspect_ratio = ipar.sample_aspect_ratio
+    opar.sample_aspect_ratio, opar.frame_size = ipar.sample_aspect_ratio, ipar.frame_size
     opar.width, opar.height = ipar.width, ipar.height
     opar.channels, opar.sample_rate, opar.channel_layout = ipar.channels, ipar.sample_rate, ipar.channel_layout
 
@@ -127,7 +131,7 @@ local function add_stream(ofile, uid, sid, info)
             opar.codec_id = ctx.oformat.subtitle_codec
         end
     end
-    local ifmt, iw, ih, layout, rate = opar.format, opar.width, opar.height, opar.channel_layout, opar.sample_rate
+    local ifmt, iw, ih, ilayout, irate = opar.format, opar.width, opar.height, opar.channel_layout, opar.sample_rate
     --add filter
     local fltctx_in, fltctx_out, flt_frame
     if info.filter then
@@ -144,6 +148,7 @@ local function add_stream(ofile, uid, sid, info)
         flt_frame = ffi.new('AVFrame*[1]', FFmpeg.av_frame_alloc())
         flt_frame = ffi.gc(flt_frame, FFmpeg.av_frame_free)
 
+        flt_frame[0].nb_samples = 1
         flt_frame[0].format = opar.format
         flt_frame[0].width  = opar.width
         flt_frame[0].height = opar.height
@@ -152,9 +157,7 @@ local function add_stream(ofile, uid, sid, info)
         flt_frame[0].extended_data = flt_frame[0].data -- extended_data will be freed by av_frame_free
     end
 
-    local swsctx, sws_frame, swrctx, swr_frame
     local codec = FFmpeg.avcodec_find_encoder(opar.codec_id)
-
     if opar.codec_type == FFmpeg.AVMEDIA_TYPE_VIDEO then -- override video parameter
         local vcodec = _OPT.specifier(ofile.c, ctx, ost)
         if vcodec then
@@ -185,54 +188,17 @@ local function add_stream(ofile, uid, sid, info)
         end
         if opar.sample_rate == 0 then opar.sample_rate = 25 end-- default 25 fps
 
-        if ifmt ~= opar.format or iw ~= opar.width or ih ~= opar.height then -- prepare sws convert
-            swsctx = FFmpeg.sws_getCachedContext(nil, iw, ih,ifmt,
-            opar.width, opar.height, opar.format,
-            FFmpeg.SWS_BICUBIC, nil, nil, nil)
-            swsctx = ffi.gc(swsctx, sws_freeContext)
-            FFmpeg.av_log(ctx, FFmpeg.AV_LOG_WARNING, 'swsctx %s:%s->%s:%s\n',
-            FFmpeg.av_get_pix_fmt_name(ifmt), iw..'x'..ih,
-            FFmpeg.av_get_pix_fmt_name(opar.format), opar.width..'x'..opar.height)
-
-            sws_frame = ffi.new('AVFrame*[1]', FFmpeg.av_frame_alloc())
-            sws_frame = ffi.gc(sws_frame, FFmpeg.av_frame_free)
-
-            sws_frame[0].format = opar.format
-            sws_frame[0].width  = opar.width
-            sws_frame[0].height = opar.height
-            ret=FFmpeg.av_image_alloc(sws_frame[0].data, sws_frame[0].linesize, opar.width, opar.height, opar.format, 4)
-            FFmpeg.assert(ret, 'av_image_alloc')
-            sws_frame[0].extended_data = sws_frame[0].data -- extended_data will be freed by av_frame_free
-        end
-
     elseif opar.codec_type == FFmpeg.AVMEDIA_TYPE_AUDIO then -- override audio parameter
         if codec.sample_fmts ~= nil then
             opar.format = _OPT.choose_sample_fmt(codec, opar.format)
         end
 
         if fltctx_out then
-            opar.format         = av_buffersink_get_format(fltctx_out[0])
-            opar.sample_rate    = av_buffersink_get_sample_rate(fltctx_out[0])
-            opar.channels       = av_buffersink_get_channels(fltctx_out[0])
-            opar.channel_layout = av_buffersink_get_channel_layout(fltctx_out[0])
+            opar.format         = FFmpeg.av_buffersink_get_format(fltctx_out[0])
+            opar.sample_rate    = FFmpeg.av_buffersink_get_sample_rate(fltctx_out[0])
+            opar.channels       = FFmpeg.av_buffersink_get_channels(fltctx_out[0])
+            opar.channel_layout = FFmpeg.av_buffersink_get_channel_layout(fltctx_out[0])
         end
-
-        if layout ~= opar.channel_layout or ifmt ~= opar.format or rate ~= opar.sample_rate then -- prepare swr convert
-            swrctx = ffi.new('SwrContext*[1]', FFmpeg.swr_alloc())
-            swrctx = ffi.gc(swrctx, FFmpeg.swr_alloc)
-            FFmpeg.av_log(ctx, FFmpeg.AV_LOG_WARNING, 'swrctx %s:%s->%s:%s\n',
-            FFmpeg.av_get_sample_fmt_name(ifmt), rate..' Hz, 0x'..tohex(layout)..' Ch',
-            FFmpeg.av_get_sample_fmt_name(opar.format), opar.sample_rate..' Hz, 0x'..tohex(opar.channel_layout)..' Ch')
-
-            swr_frame = ffi.new('AVFrame*[1]', FFmpeg.av_frame_alloc())
-            swr_frame = ffi.gc(swr_frame, FFmpeg.av_frame_free)
-
-            swr_frame[0].channels = opar.channels
-            swr_frame[0].format = opar.format
-            swr_frame[0].channel_layout = opar.channel_layout
-            swr_frame[0].sample_rate = opar.sample_rate
-        end
-
     end
    
      --´´½¨±àÂëµÄAVCodecContext
@@ -252,18 +218,82 @@ local function add_stream(ofile, uid, sid, info)
     packet = ffi.gc(packet, FFmpeg.av_packet_free)
     packet[0].stream_index = ist.index
 
+    -- prepare convert
+    local swsctx, sws_frame, swrctx, swr_frame, fifo, fifo_frame
+    if opar.codec_type == FFmpeg.AVMEDIA_TYPE_VIDEO then
+        if ifmt ~= opar.format or iw ~= opar.width or ih ~= opar.height then
+            swsctx = FFmpeg.sws_getCachedContext(nil, iw, ih,ifmt,
+            opar.width, opar.height, opar.format,
+            FFmpeg.SWS_BICUBIC, nil, nil, nil)
+            swsctx = ffi.gc(swsctx, sws_freeContext)
+            FFmpeg.av_log(ctx, FFmpeg.AV_LOG_WARNING, 'swsctx %s:%s->%s:%s\n',
+            FFmpeg.av_get_pix_fmt_name(ifmt), iw..'x'..ih,
+            FFmpeg.av_get_pix_fmt_name(opar.format), opar.width..'x'..opar.height)
+
+            sws_frame = ffi.new('AVFrame*[1]', FFmpeg.av_frame_alloc())
+            sws_frame = ffi.gc(sws_frame, FFmpeg.av_frame_free)
+
+            sws_frame[0].nb_samples = 1
+            sws_frame[0].format = opar.format
+            sws_frame[0].width  = opar.width
+            sws_frame[0].height = opar.height
+            ret=FFmpeg.av_image_alloc(sws_frame[0].data, sws_frame[0].linesize, opar.width, opar.height, opar.format, 4)
+            FFmpeg.assert(ret, 'av_image_alloc')
+            sws_frame[0].extended_data = sws_frame[0].data -- extended_data will be freed by av_frame_free
+        end
+    elseif opar.codec_type == FFmpeg.AVMEDIA_TYPE_AUDIO then
+        if ilayout ~= opar.channel_layout or ifmt ~= opar.format or irate ~= opar.sample_rate then
+            swrctx = ffi.new('SwrContext*[1]', FFmpeg.swr_alloc())
+            swrctx = ffi.gc(swrctx, FFmpeg.swr_alloc)
+            FFmpeg.av_log(ctx, FFmpeg.AV_LOG_WARNING, 'swrctx %s:%s->%s:%s\n',
+            FFmpeg.av_get_sample_fmt_name(ifmt), irate..' Hz, 0x'..tohex(ilayout)..' Ch',
+            FFmpeg.av_get_sample_fmt_name(opar.format), opar.sample_rate..' Hz, 0x'..tohex(opar.channel_layout)..' Ch')
+
+            swr_frame = ffi.new('AVFrame*[1]', FFmpeg.av_frame_alloc())
+            swr_frame = ffi.gc(swr_frame, FFmpeg.av_frame_free)
+
+            swr_frame[0].channels = opar.channels
+            swr_frame[0].format = opar.format
+            swr_frame[0].nb_samples = opar.frame_size 
+            swr_frame[0].channel_layout = opar.channel_layout
+            swr_frame[0].sample_rate = opar.sample_rate
+        end
+        fifo_frame = swr_frame
+        if not fifo_frame then
+            fifo_frame = ffi.new('AVFrame*[1]', FFmpeg.av_frame_alloc())
+            fifo_frame = ffi.gc(fifo_frame, FFmpeg.av_frame_free)
+
+            fifo_frame[0].channels = opar.channels
+            fifo_frame[0].format = opar.format
+            fifo_frame[0].nb_samples = opar.frame_size 
+            fifo_frame[0].channel_layout = opar.channel_layout
+            fifo_frame[0].sample_rate = opar.sample_rate
+            ret = FFmpeg.av_frame_get_buffer(fifo_frame[0], 4)
+            FFmpeg.assert(ret, 'av_frame_get_buffer')
+        end
+        fifo = FFmpeg.av_audio_fifo_alloc(opar.format, opar.channels, opar.frame_size)
+        fifo = ffi.gc(fifo, FFmpeg.av_audio_fifo_free) 
+    end
+
     ofile[ost.index+1] = {
         avctx = avctx,
-        fltctx_in = fltctx_in,
-        fltctx_out = fltctx_out,
-        flt_frame = flt_frame,
-        swsctx = swsctx, sws_frame = sws_frame,
-        swrctx = swrctx, swr_frame = swr_frame,
-        filter_info = info.filter,
         packet = packet,
         uid=uid,
         sid=sid,
         pts=0,
+
+        -- filter
+        fltctx_in = fltctx_in,
+        fltctx_out = fltctx_out,
+        flt_frame = flt_frame,
+        filter_info = info.filter,
+
+        -- video
+        swsctx = swsctx, sws_frame = sws_frame,
+        
+        -- audio
+        swrctx = swrctx, swr_frame = swr_frame,
+        fifo=fifo, fifo_frame = fifo_frame,
     }
     -- change other parameter
     if ofile.f == 'sdl' and ifile.re == nil then ifile.re = 'true' end
@@ -332,15 +362,17 @@ local function receive_frame(ocell, cur_time)
     local ret, ist = 0, ctx.streams[ocell.sid-1]
     local decoder, frame, packet = icell.avctx[0], icell.frame[0], icell.packet[0]
     if icell.frame_time == cur_time then goto finish end
-    if ifile.re == 'true' and icell.frame_time > cur_time then return FFmpeg.AVERROR_AGAIN, icell.frame_time end
+    if ifile.re == 'true' and icell.frame_time > cur_time then
+        return FFmpeg.AVERROR_AGAIN, icell.frame_time
+    end
 
     ::retry::
     ret = FFmpeg.av_read_frame(ctx, packet)
-    if ret ~= 0 then goto finish end
+    if ret ~= 0 then return ret end
     if packet.stream_index + 1 ~= ocell.sid then goto retry end
 
     ret = FFmpeg.avcodec_send_packet(decoder, packet)
-    if ret ~= 0 then goto finish end
+    if ret ~= 0 then return ret end
 
     ret = FFmpeg.avcodec_receive_frame(decoder, frame)
     if ret == FFmpeg.AVERROR_AGAIN then goto retry
@@ -349,7 +381,9 @@ local function receive_frame(ocell, cur_time)
         frame.best_effort_timestamp = frame.best_effort_timestamp - icell.first_effort_timestamp
         if ifile.re == 'true' then
             icell.frame_time = frame.best_effort_timestamp * 1000000 * ist.time_base.num / ist.time_base.den
-            if icell.frame_time > cur_time then return FFmpeg.AVERROR_AGAIN, icell.frame_time end
+            if icell.frame_time > cur_time then
+                return FFmpeg.AVERROR_AGAIN, icell.frame_time
+            end
         else
             icell.frame_time = cur_time
         end
@@ -358,19 +392,35 @@ local function receive_frame(ocell, cur_time)
     ::finish::
     return ret, frame, ist
 end
+local function fifo_read_frame(ocell)
+    local frame = ocell.fifo_frame[0]
+    frame.nb_samples = FFmpeg.av_audio_fifo_size(ocell.fifo)
+    if frame.nb_samples == 0 then
+        return
+    elseif frame.nb_samples > ocell.avctx[0].frame_size then
+        frame.nb_samples = ocell.avctx[0].frame_size
+    end
+    local ret = FFmpeg.av_audio_fifo_read(ocell.fifo, ffi.cast('void**', frame.data), frame.nb_samples)
+    FFmpeg.assert(ret, 'av_audio_fifo_read')
+    return frame, ocell.pts
+end
 local function transcode_step(ofile, cur_time)
     local ocell, stream_index = choose_ocell(ofile)
     if not ocell then return close_ofile(ofile) end
     local ctx, encoder, packet = fmtctx(ofile), ocell.avctx[0], ocell.packet[0]
-    local ost = ctx.streams[stream_index]
+    local ost, seq = ctx.streams[stream_index]
 
     local ret, frame, ist = receive_frame(ocell, cur_time)
-    if ret == FFmpeg.AVERROR_EOF then return close_ocell(ocell)
-    elseif ret == FFmpeg.AVERROR_AGAIN then return frame end
+    if ret == FFmpeg.AVERROR_EOF then
+        if ocell.fifo then frame, seq = fifo_read_frame(ocell) end
+        goto flush
+    elseif ret == FFmpeg.AVERROR_AGAIN then
+        return frame
+    end
     FFmpeg.assert(ret, 'receive_frame')
 
     -- encoder sequence number
-    local seq = FFmpeg.av_rescale_q(frame.best_effort_timestamp, ist.time_base, encoder.time_base)
+    seq = FFmpeg.av_rescale_q(frame.best_effort_timestamp, ist.time_base, encoder.time_base)
     if seq < ocell.pts then return end --ignore the old frame
 
     if ocell.fltctx_in then
@@ -394,18 +444,32 @@ local function transcode_step(ofile, cur_time)
         FFmpeg.assert(ret, 'swr_convert_frame')
         frame = ocell.swr_frame[0]
     end
-    frame.pts, ocell.pts = seq, seq+1
+    if ocell.fifo and (frame.nb_samples ~= encoder.frame_size or  FFmpeg.av_audio_fifo_size(ocell.fifo) > 0) then
+        ret = FFmpeg.av_audio_fifo_write(ocell.fifo, ffi.cast('void**', frame.data), frame.nb_samples)
+        FFmpeg.assert(ret, 'av_audio_fifo_write')
+        if FFmpeg.av_audio_fifo_size(ocell.fifo) < encoder.frame_size then return end
+        frame, seq = fifo_read_frame(ocell)
+    end
+    ::flush::
+    if frame then frame.pts, ocell.pts = seq, seq+frame.nb_samples end
     ret = FFmpeg.avcodec_send_frame(encoder, frame)
     FFmpeg.assert(ret, 'avcodec_send_frame')
     while true do
         assert(packet.size == 0 and packet.stream_index == stream_index)
         ret = FFmpeg.avcodec_receive_packet(encoder, packet)
-        if ret == FFmpeg.AVERROR_AGAIN then return end
+        if ret == FFmpeg.AVERROR_AGAIN or ret == FFmpeg.AVERROR_EOF then break end
         FFmpeg.assert(ret, 'avcodec_receive_packet')
         packet.pts = FFmpeg.av_rescale_q(packet.pts, encoder.time_base, ost.time_base)
+        packet.dts = FFmpeg.av_rescale_q(packet.dts, encoder.time_base, ost.time_base)
         ret = FFmpeg.av_interleaved_write_frame(ctx, packet)
         if ret == FFmpeg.AVERROR_EIO then return close_ofile(ofile) end
         FFmpeg.assert(ret, 'av_interleaved_write_frame')
+    end
+    if frame == nil then
+        close_ocell(ocell)
+    elseif ocell.fifo and FFmpeg.av_audio_fifo_size(ocell.fifo) >= encoder.frame_size then
+        frame, seq = fifo_read_frame(ocell)
+        goto flush
     end
 end
 --------------------------------------------------------------------------------

@@ -2,7 +2,7 @@ local CWD, ARG =...
 --------------------------------------------------------------------------------
 local inputs, opt ={},{}
 local global={'sdk','cdef', 'sdp_file',
-    'y','n','hide_banner', 'v',
+    'y','n','banner', 'v',
     'protocols', 'filters', 'pix_fmts',
     'codecs', 'decoders', 'encoders',
     'formats', 'muxers', 'demuxers', 'devices',
