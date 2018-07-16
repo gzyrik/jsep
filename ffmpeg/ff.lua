@@ -296,7 +296,7 @@ local function add_stream(ofile, uid, sid, info)
         fifo=fifo, fifo_frame = fifo_frame,
     }
     -- change other parameter
-    if ofile.f == 'sdl' and ifile.re == nil then ifile.re = 'true' end
+    if ofile.f == 'sdl' and ifile.re == nil then ifile.re = true end
     _OPT.mark_used(ifile, 're')
 end
 local function open_ofile(ofile)
@@ -362,7 +362,7 @@ local function receive_frame(ocell, cur_time)
     local ret, ist = 0, ctx.streams[ocell.sid-1]
     local decoder, frame, packet = icell.avctx[0], icell.frame[0], icell.packet[0]
     if icell.frame_time == cur_time then goto finish end
-    if ifile.re == 'true' and icell.frame_time > cur_time then
+    if ifile.re == true and icell.frame_time > cur_time then
         return FFmpeg.AVERROR_AGAIN, icell.frame_time
     end
 
@@ -379,7 +379,7 @@ local function receive_frame(ocell, cur_time)
     elseif ret == 0 then
         if not icell.first_effort_timestamp then icell.first_effort_timestamp = frame.best_effort_timestamp end
         frame.best_effort_timestamp = frame.best_effort_timestamp - icell.first_effort_timestamp
-        if ifile.re == 'true' then
+        if ifile.re == true then
             icell.frame_time = frame.best_effort_timestamp * 1000000 * ist.time_base.num / ist.time_base.den
             if icell.frame_time > cur_time then
                 return FFmpeg.AVERROR_AGAIN, icell.frame_time

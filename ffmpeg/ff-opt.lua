@@ -2,7 +2,7 @@ local CWD, ARG =...
 --------------------------------------------------------------------------------
 local inputs, opt ={},{}
 local global={'sdk','cdef', 'sdp_file',
-    'y','n','banner', 'v',
+    'y','n','show_banner', 'v',
     'protocols', 'filters', 'pix_fmts',
     'codecs', 'decoders', 'encoders',
     'formats', 'muxers', 'demuxers', 'devices',
@@ -354,18 +354,18 @@ local guess_map = function (ofile)
     if vn == nil
         and FFmpeg.av_guess_codec(fmtctx(ofile).oformat,
         nil, name, nil, FFmpeg.AVMEDIA_TYPE_VIDEO) == FFmpeg.AV_CODEC_ID_NONE then
-        vn = 'true'
+        vn = true
     else
         mark_used(ofile, 'vn')
     end
     if an == nil
         and FFmpeg.av_guess_codec(fmtctx(ofile).oformat,
         nil, name, nil, FFmpeg.AVMEDIA_TYPE_AUDIO) == FFmpeg.AV_CODEC_ID_NONE then
-        an =  'true'
+        an =  true
     else
         mark_used(ofile, 'an')
     end
-    if vn ~= 'true' then
+    if not vn then
         local best_area, uidx, sidx=0
         for i, ifile in ipairs(inputs) do -- find best video: highest resolution
             local sindex = FFmpeg.av_find_best_stream(fmtctx(ifile), FFmpeg.AVMEDIA_TYPE_VIDEO, -1, -1, nil, 0);
@@ -384,7 +384,7 @@ local guess_map = function (ofile)
             table.insert(m, val)
         end
     end
-    if an ~= 'true' then
+    if not an then
         local best_score, uidx, sidx=0
         for i, ifile in ipairs(inputs) do -- find best audio: most channels
             local sindex = FFmpeg.av_find_best_stream(fmtctx(ifile), FFmpeg.AVMEDIA_TYPE_AUDIO, -1, -1, nil, 0);
@@ -549,11 +549,11 @@ opt.check_arg = check_unknown
 opt.mark_used = mark_used
 opt.specifier = specifier
 opt.confirm_file = function(name)
-    if opt.y == 'true' and opt.n  == 'true' then
+    if opt.y and opt.n then
         FFmpeg.error("Error, both -y and -n supplied. Exiting.\n");
     end
-    if opt.y ~= 'true' and io.open(name, 'r') then
-        if opt.n == 'true' then
+    if not opt.y and io.open(name, 'r') then
+        if opt.n then
             FFmpeg.error("File '%s' already exists. Exiting.\n", name)
         else
             FFmpeg.av_log(nil, FFmpeg.AV_LOG_ERROR,

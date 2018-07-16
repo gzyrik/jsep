@@ -139,7 +139,7 @@ local description={
 
     The format is ‘wxh’ (default - same as source).
 ]],
-    banner=[[printing banner]],
+    show_banner=[[printing banner]],
     re=[[
 -re (input)
     Read input at native frame rate. Mainly used to simulate a grab device,
@@ -182,7 +182,7 @@ Global options affect whole program instead of just one file:
 ]],[[
 Advanced global options:
     -cpuflags flags     force specific cpu flags
-    -banner             show program banner
+    -show_banner        show program banner
 ]]}
 local file_options={[[
 Per-file main options:
