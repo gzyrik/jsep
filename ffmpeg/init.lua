@@ -81,6 +81,7 @@ local M = {
 
     AVERROR_EXIT = FFERRTAG'EXIT',
     AVERROR_EOF = FFERRTAG'EOF ',
+    AVERROR_AGAIN = ffi.abi('win') and -11 or -35,
 
     AV_LOG_QUIET   = -8,
     AV_LOG_PANIC   = 0,
@@ -176,12 +177,8 @@ local M = {
     AVFILTER_FLAG_SUPPORT_TIMELINE_GENERIC=0x10000,
     AVFILTER_FLAG_SUPPORT_TIMELINE_INTERNAL=0x20000,
     AVFILTER_FLAG_SUPPORT_TIMELINE = 0x30000,
+
 }
-if jit.os == 'Windows' then
-    M.AVERROR_AGAIN =  -11
-else
-    M.AVERROR_AGAIN =  -35
-end
 --------------------------------------------------------------------------------
 local function sym(lib, func) return lib[func] end
 M.assert = function (err, prefix, ...)

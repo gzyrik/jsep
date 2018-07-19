@@ -98,7 +98,7 @@ local function open_stream(ifile, uid, sid)
 
     local frame = ffi.new('AVFrame*[1]', FFmpeg.av_frame_alloc())
     frame = ffi.gc(frame, FFmpeg.av_frame_free)
-    frame[0].nb_samples = 1
+    if ipar.codec_type == FFmpeg.AVMEDIA_TYPE_VIDEO then frame[0].nb_samples = 1 end
 
     ifile[sid] = {
         avctx = avctx,
@@ -168,7 +168,7 @@ local function add_stream(ofile, uid, sid, info)
             opar.format = ofile.pix_fmt
             _OPT.mark_used(ofile, 'pix_fmt')
         end
-        if codec.pix_fmts ~= nil then
+        if codec ~= nil and codec.pix_fmts ~= nil then
             opar.format = _OPT.choose_pix_fmt(codec, opar.format)
         end
         local vsize = _OPT.specifier(ofile.s, ctx, ost)
@@ -189,7 +189,7 @@ local function add_stream(ofile, uid, sid, info)
         if opar.sample_rate == 0 then opar.sample_rate = 25 end-- default 25 fps
 
     elseif opar.codec_type == FFmpeg.AVMEDIA_TYPE_AUDIO then -- override audio parameter
-        if codec.sample_fmts ~= nil then
+        if codec ~= nil and codec.sample_fmts ~= nil then
             opar.format = _OPT.choose_sample_fmt(codec, opar.format)
         end
 
@@ -219,7 +219,7 @@ local function add_stream(ofile, uid, sid, info)
     packet[0].stream_index = ist.index
 
     -- prepare convert
-    local swsctx, sws_frame, swrctx, swr_frame, fifo, fifo_frame
+    local swsctx, sws_frame, swrctx, swr_frame, audio_fifo, fifo_frame
     if opar.codec_type == FFmpeg.AVMEDIA_TYPE_VIDEO then
         if ifmt ~= opar.format or iw ~= opar.width or ih ~= opar.height then
             swsctx = FFmpeg.sws_getCachedContext(nil, iw, ih,ifmt,
@@ -271,8 +271,8 @@ local function add_stream(ofile, uid, sid, info)
             ret = FFmpeg.av_frame_get_buffer(fifo_frame[0], 4)
             FFmpeg.assert(ret, 'av_frame_get_buffer')
         end
-        fifo = FFmpeg.av_audio_fifo_alloc(opar.format, opar.channels, opar.frame_size)
-        fifo = ffi.gc(fifo, FFmpeg.av_audio_fifo_free) 
+        audio_fifo = FFmpeg.av_audio_fifo_alloc(opar.format, opar.channels, opar.frame_size)
+        audio_fifo = ffi.gc(audio_fifo, FFmpeg.av_audio_fifo_free) 
     end
 
     ofile[ost.index+1] = {
@@ -293,7 +293,7 @@ local function add_stream(ofile, uid, sid, info)
         
         -- audio
         swrctx = swrctx, swr_frame = swr_frame,
-        fifo=fifo, fifo_frame = fifo_frame,
+        audio_fifo=audio_fifo, fifo_frame = fifo_frame,
     }
     -- change other parameter
     if ofile.f == 'sdl' and ifile.re == nil then ifile.re = true end
@@ -328,7 +328,7 @@ local function choose_ocell(ofile)
 end
 local function close_ocell(ocell)
     if not ocell.avctx then return end
-    ocell.avctx = nil
+    ocell.avctx, ocell.audio_fifo = nil
     ocell.filter_info = nil
     ocell.flt_frame = nil
     ocell.sws_frame = nil
@@ -349,9 +349,7 @@ end
 local function close_ifile(ifile)
     if not ifile[0] then return end
     for _, icell in ipairs(ifile) do
-        icell.avctx = nil
-        icell.frame = nil
-        icell.packet = nil
+        icell.avctx, icell.frame, icell.packet = nil
     end
     ifile[0] = nil
 end
@@ -394,13 +392,13 @@ local function receive_frame(ocell, cur_time)
 end
 local function fifo_read_frame(ocell)
     local frame = ocell.fifo_frame[0]
-    frame.nb_samples = FFmpeg.av_audio_fifo_size(ocell.fifo)
+    frame.nb_samples = FFmpeg.av_audio_fifo_size(ocell.audio_fifo)
     if frame.nb_samples == 0 then
         return
     elseif frame.nb_samples > ocell.avctx[0].frame_size then
         frame.nb_samples = ocell.avctx[0].frame_size
     end
-    local ret = FFmpeg.av_audio_fifo_read(ocell.fifo, ffi.cast('void**', frame.data), frame.nb_samples)
+    local ret = FFmpeg.av_audio_fifo_read(ocell.audio_fifo, ffi.cast('void**', frame.data), frame.nb_samples)
     FFmpeg.assert(ret, 'av_audio_fifo_read')
     return frame, ocell.pts
 end
@@ -412,7 +410,7 @@ local function transcode_step(ofile, cur_time)
 
     local ret, frame, ist = receive_frame(ocell, cur_time)
     if ret == FFmpeg.AVERROR_EOF then
-        if ocell.fifo then frame, seq = fifo_read_frame(ocell) end
+        if ocell.audio_fifo then frame, seq = fifo_read_frame(ocell) end
         goto flush
     elseif ret == FFmpeg.AVERROR_AGAIN then
         return frame
@@ -444,10 +442,10 @@ local function transcode_step(ofile, cur_time)
         FFmpeg.assert(ret, 'swr_convert_frame')
         frame = ocell.swr_frame[0]
     end
-    if ocell.fifo and (frame.nb_samples ~= encoder.frame_size or  FFmpeg.av_audio_fifo_size(ocell.fifo) > 0) then
-        ret = FFmpeg.av_audio_fifo_write(ocell.fifo, ffi.cast('void**', frame.data), frame.nb_samples)
+    if ocell.audio_fifo and (frame.nb_samples ~= encoder.frame_size or FFmpeg.av_audio_fifo_size(ocell.audio_fifo) > 0) then
+        ret = FFmpeg.av_audio_fifo_write(ocell.audio_fifo, ffi.cast('void**', frame.data), frame.nb_samples)
         FFmpeg.assert(ret, 'av_audio_fifo_write')
-        if FFmpeg.av_audio_fifo_size(ocell.fifo) < encoder.frame_size then return end
+        if FFmpeg.av_audio_fifo_size(ocell.audio_fifo) < encoder.frame_size then return end
         frame, seq = fifo_read_frame(ocell)
     end
     ::flush::
@@ -467,7 +465,7 @@ local function transcode_step(ofile, cur_time)
     end
     if frame == nil then
         close_ocell(ocell)
-    elseif ocell.fifo and FFmpeg.av_audio_fifo_size(ocell.fifo) >= encoder.frame_size then
+    elseif ocell.audio_fifo and FFmpeg.av_audio_fifo_size(ocell.audio_fifo) >= encoder.frame_size then
         frame, seq = fifo_read_frame(ocell)
         goto flush
     end
