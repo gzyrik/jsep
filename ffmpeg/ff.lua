@@ -98,7 +98,6 @@ local function open_stream(ifile, uid, sid)
 
     local frame = ffi.new('AVFrame*[1]', FFmpeg.av_frame_alloc())
     frame = ffi.gc(frame, FFmpeg.av_frame_free)
-    if ipar.codec_type == FFmpeg.AVMEDIA_TYPE_VIDEO then frame[0].nb_samples = 1 end
 
     ifile[sid] = {
         avctx = avctx,
@@ -148,7 +147,6 @@ local function add_stream(ofile, uid, sid, info)
         flt_frame = ffi.new('AVFrame*[1]', FFmpeg.av_frame_alloc())
         flt_frame = ffi.gc(flt_frame, FFmpeg.av_frame_free)
 
-        flt_frame[0].nb_samples = 1
         flt_frame[0].format = opar.format
         flt_frame[0].width  = opar.width
         flt_frame[0].height = opar.height
@@ -237,7 +235,6 @@ local function add_stream(ofile, uid, sid, info)
             sws_frame = ffi.new('AVFrame*[1]', FFmpeg.av_frame_alloc())
             sws_frame = ffi.gc(sws_frame, FFmpeg.av_frame_free)
 
-            sws_frame[0].nb_samples = 1
             sws_frame[0].format = opar.format
             sws_frame[0].width  = opar.width
             sws_frame[0].height = opar.height
@@ -454,7 +451,14 @@ local function transcode_step(ofile, cur_time)
         frame, seq = fifo_read_frame(ocell)
     end
     ::flush::
-    if frame then frame.pts, ocell.pts = seq, seq+frame.nb_samples end
+    if frame then
+        frame.pts = seq
+        if frame.nb_samples == 0 then
+            ocell.pts = seq + 1
+        else
+            ocell.pts = seq + frame.nb_samples
+        end
+    end
     ret = FFmpeg.avcodec_send_frame(encoder, frame)
     FFmpeg.assert(ret, 'avcodec_send_frame')
     while true do
