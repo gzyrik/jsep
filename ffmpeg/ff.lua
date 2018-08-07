@@ -157,7 +157,7 @@ local function add_stream(ofile, uid, sid, info)
         flt_frame[0].extended_data = flt_frame[0].data -- extended_data will be freed by av_frame_free
     end
 
-    local codec = FFmpeg.avcodec_find_encoder(opar.codec_id)
+    local codec
     if opar.codec_type == FFmpeg.AVMEDIA_TYPE_VIDEO then -- override video parameter
         local vcodec = _OPT.specifier(ofile.c, ctx, ost)
         if vcodec then
@@ -168,7 +168,9 @@ local function add_stream(ofile, uid, sid, info)
             opar.format = ofile.pix_fmt
             _OPT.mark_used(ofile, 'pix_fmt')
         end
-        if codec ~= nil and codec.pix_fmts ~= nil then
+
+        codec = FFmpeg.avcodec_find_encoder(opar.codec_id)
+        if codec.pix_fmts ~= nil then
             opar.format = _OPT.choose_pix_fmt(codec, opar.format)
         end
         local vsize = _OPT.specifier(ofile.s, ctx, ost)
@@ -189,7 +191,9 @@ local function add_stream(ofile, uid, sid, info)
         if opar.sample_rate == 0 then opar.sample_rate = 25 end-- default 25 fps
 
     elseif opar.codec_type == FFmpeg.AVMEDIA_TYPE_AUDIO then -- override audio parameter
-        if codec ~= nil and codec.sample_fmts ~= nil then
+
+        codec = FFmpeg.avcodec_find_encoder(opar.codec_id)
+        if codec.sample_fmts ~= nil then
             opar.format = _OPT.choose_sample_fmt(codec, opar.format)
         end
 
@@ -262,6 +266,7 @@ local function add_stream(ofile, uid, sid, info)
         if not fifo_frame then
             fifo_frame = ffi.new('AVFrame*[1]', FFmpeg.av_frame_alloc())
             fifo_frame = ffi.gc(fifo_frame, FFmpeg.av_frame_free)
+            assert(opar.frame_size > 0)
 
             fifo_frame[0].channels = opar.channels
             fifo_frame[0].format = opar.format
