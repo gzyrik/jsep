@@ -1,0 +1,44 @@
+diff --git a/build/config/ui.gni b/build/config/ui.gni
+index ce384b5cdd..69b3cc48ad 100644
+--- a/build/config/ui.gni
++++ b/build/config/ui.gni
+@@ -48,7 +48,7 @@ declare_args() {
+ # These variables depend on other variables and can't be set externally.
+ 
+ # Indicates if the UI toolkit depends on X11.
+-use_x11 = is_linux && !use_ozone
++use_x11 = false #is_linux && !use_ozone
+ 
+ # Turn off glib if Ozone is enabled.
+ if (use_ozone) {
+diff --git a/webrtc/modules/audio_device/linux/audio_device_pulse_linux.cc b/webrtc/modules/audio_device/linux/audio_device_pulse_linux.cc
+index 54fabb56ed..4a7d5ce91c 100644
+--- a/webrtc/modules/audio_device/linux/audio_device_pulse_linux.cc
++++ b/webrtc/modules/audio_device/linux/audio_device_pulse_linux.cc
+@@ -172,7 +172,7 @@ AudioDeviceGeneric::InitStatus AudioDeviceLinuxPulse::Init() {
+   _recError = 0;
+ 
+   // Get X display handle for typing detection
+-  _XDisplay = XOpenDisplay(NULL);
++  _XDisplay = 0;//XOpenDisplay(NULL);
+   if (!_XDisplay) {
+     LOG(LS_WARNING)
+         << "failed to open X display, typing detection will not work";
+@@ -230,7 +230,7 @@ int32_t AudioDeviceLinuxPulse::Terminate() {
+   }
+ 
+   if (_XDisplay) {
+-    XCloseDisplay(_XDisplay);
++    //XCloseDisplay(_XDisplay);
+     _XDisplay = NULL;
+   }
+ 
+@@ -2575,7 +2575,7 @@ bool AudioDeviceLinuxPulse::KeyPressed() const {
+     return false;
+ 
+   // Check key map status
+-  XQueryKeymap(_XDisplay, szKey);
++  //XQueryKeymap(_XDisplay, szKey);
+ 
+   // A bit change in keymap means a key is pressed
+   for (i = 0; i < sizeof(szKey); i++)
